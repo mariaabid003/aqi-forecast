@@ -1,0 +1,13 @@
+requests
+pandas
+numpy
+scikit-learn
+matplotlib
+tensorflow
+shap
+streamlit
+flask
+apache-airflow
+hopsworks
+google-cloud-aiplatform
+python-dotenv
