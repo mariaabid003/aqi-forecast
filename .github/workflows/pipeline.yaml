@@ -41,7 +41,7 @@ jobs:
       - name: Run Feature Backfill
         env:
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-          AQICN_API_KEY: ${{ secrets.AQICN_API_KEY }}
+          AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
         run: python features/backfill.py
 
       # -------------------------
@@ -50,13 +50,13 @@ jobs:
       - name: Train Sklearn Model
         env:
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-          AQICN_API_KEY: ${{ secrets.AQICN_API_KEY }}
+          AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
         run: python trainings/train_sklearn.py
 
       - name: Train TensorFlow Model
         env:
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-          AQICN_API_KEY: ${{ secrets.AQICN_API_KEY }}
+          AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
         run: python trainings/train_tf.py
 
       # -------------------------
