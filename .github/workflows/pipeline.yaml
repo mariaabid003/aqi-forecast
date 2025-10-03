@@ -3,7 +3,7 @@ name: Run AQI Pipeline
 on:
   workflow_dispatch:  # allow manual trigger
   schedule:
-    - cron: "0 * * * *"  # every hour for features
+    - cron: "0 * * * *"  # every hour for feature backfill
     - cron: "0 0 * * *"  # daily retraining at midnight
 
 jobs:
@@ -39,15 +39,24 @@ jobs:
       # Run Feature Pipeline
       # -------------------------
       - name: Run Feature Backfill
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          AQICN_API_KEY: ${{ secrets.AQICN_API_KEY }}
         run: python features/backfill.py
 
       # -------------------------
       # Train Models
       # -------------------------
       - name: Train Sklearn Model
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          AQICN_API_KEY: ${{ secrets.AQICN_API_KEY }}
         run: python trainings/train_sklearn.py
 
       - name: Train TensorFlow Model
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          AQICN_API_KEY: ${{ secrets.AQICN_API_KEY }}
         run: python trainings/train_tf.py
 
       # -------------------------
