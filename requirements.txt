@@ -1,24 +1,13 @@
-# Core
-numpy==1.26.4
-pandas==2.2.3
-scikit-learn==1.5.2
-matplotlib==3.9.2
-
-# ML
-tensorflow-cpu==2.17.0
-shap==0.45.1
-
-# Serving / Dashboard
-streamlit==1.39.0
-flask==3.0.3
-
-# Scheduling (optional, heavy, exclude from CI if not needed)
-# apache-airflow==2.10.2
-
-# Cloud SDKs
-hopsworks==3.7.0
-google-cloud-aiplatform==1.70.0
-
-# Configs
-python-dotenv==1.0.1
-requests==2.32.3
+requests
+pandas>=2.0,<3.0
+numpy
+scikit-learn
+matplotlib
+tensorflow
+shap
+streamlit>=1.30.0
+flask
+apache-airflow
+hsfs>=3.0.7
+google-cloud-aiplatform
+python-dotenv
