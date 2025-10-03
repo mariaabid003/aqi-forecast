@@ -1,53 +1,68 @@
-name: AQI Forecasting Pipeline
+name: Run AQI Pipeline
 
 on:
-  schedule:
-    # Every hour → fetch new data
-    - cron: "0 * * * *"
-    # Every day at midnight → retrain models
-    - cron: "0 0 * * *"
   workflow_dispatch:  # allow manual trigger
+  schedule:
+    - cron: "0 * * * *"  # every hour for features
+    - cron: "0 0 * * *"  # daily retraining at midnight
 
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout repo
+      # -------------------------
+      # Checkout repo
+      # -------------------------
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # Step 2: Set up Python
+      # -------------------------
+      # Set up Python
+      # -------------------------
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      # Step 3: Install dependencies
+      # -------------------------
+      # Install dependencies
+      # -------------------------
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # Exclude Airflow in CI (too heavy)
+          grep -v apache-airflow requirements.txt > requirements-ci.txt
+          pip install -r requirements-ci.txt
 
-      # Step 4: Run hourly backfill (if schedule == hourly)
-      - name: Run backfill
-        if: github.event.schedule == '0 * * * *'
-        run: |
-          echo "🚀 Running backfill.py"
-          python features/backfill.py
+      # -------------------------
+      # Run Feature Pipeline
+      # -------------------------
+      - name: Run Feature Backfill
+        run: python features/backfill.py
 
-      # Step 5: Run daily training (if schedule == midnight)
-      - name: Run training
-        if: github.event.schedule == '0 0 * * *'
-        run: |
-          echo "🚀 Running training scripts"
-          python trainings/train_sklearn.py
-          python trainings/train_tf.py
+      # -------------------------
+      # Train Models
+      # -------------------------
+      - name: Train Sklearn Model
+        run: python trainings/train_sklearn.py
 
-      # Step 6: Save logs
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@v3
+      - name: Train TensorFlow Model
+        run: python trainings/train_tf.py
+
+      # -------------------------
+      # Evaluate Models
+      # -------------------------
+      - name: Evaluate Models
+        run: python trainings/evaluate.py
+
+      # -------------------------
+      # Save Artifacts
+      # -------------------------
+      - name: Upload Artifacts (models, logs)
+        uses: actions/upload-artifact@v4
         with:
-          name: pipeline-logs
-          path: "*.log"
+          name: aqi-models
+          path: |
+            models/
+            logs/
