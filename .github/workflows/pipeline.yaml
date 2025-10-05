@@ -15,18 +15,18 @@ jobs:
         uses: actions/checkout@v4
 
       # -------------------------
-      # 2. Set up Python (use 3.10 to ensure Hopsworks/HSFS compatibility)
+      # 2. Set up Python 3.11
       # -------------------------
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       # -------------------------
-      # 3. Cache pip dependencies (optional but faster)
+      # 3. Cache pip dependencies
       # -------------------------
       - name: Cache pip packages
-        uses: actions/cache@v4
+        uses: actions/cache@v3
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
@@ -39,20 +39,12 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # Avoid installing Airflow (too heavy for CI)
+          # Avoid installing Apache Airflow during CI (too heavy)
           grep -v apache-airflow requirements.txt > requirements-ci.txt
           pip install -r requirements-ci.txt
 
       # -------------------------
-      # 5. Verify dependencies
-      # -------------------------
-      - name: Verify environment
-        run: |
-          python --version
-          pip list
-
-      # -------------------------
-      # 6. Run Feature Backfill
+      # 5. Run Feature Backfill
       # -------------------------
       - name: Run Feature Backfill
         env:
@@ -62,7 +54,7 @@ jobs:
         run: python features/backfill.py
 
       # -------------------------
-      # 7. Train Sklearn Model
+      # 6. Train Sklearn Model
       # -------------------------
       - name: Train Sklearn Model
         env:
@@ -72,7 +64,7 @@ jobs:
         run: python trainings/train_sklearn.py
 
       # -------------------------
-      # 8. Train TensorFlow Model
+      # 7. Train TensorFlow Model
       # -------------------------
       - name: Train TensorFlow Model
         env:
@@ -82,13 +74,13 @@ jobs:
         run: python trainings/train_tf.py
 
       # -------------------------
-      # 9. Evaluate Models
+      # 8. Evaluate Models
       # -------------------------
       - name: Evaluate Models
         run: python trainings/evaluate.py
 
       # -------------------------
-      # 10. Upload Artifacts (models + logs)
+      # 9. Upload Artifacts (models + logs)
       # -------------------------
       - name: Upload Artifacts (models, logs)
         uses: actions/upload-artifact@v4

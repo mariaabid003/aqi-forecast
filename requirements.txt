@@ -1,4 +1,4 @@
-# Core dependencies
+# -------- Core dependencies --------
 requests
 pandas>=2.0,<3.0
 numpy
@@ -10,12 +10,14 @@ streamlit>=1.30.0
 flask
 python-dotenv
 
-# Hopsworks Feature Store (compatible with Python 3.10)
-hopsworks==3.7.0
-hsfs==3.7.9
+# -------- Hopsworks Feature Store --------
+# Must match backend version (4.2.2) and requires Python >=3.11
+hopsworks==4.2.2
+hsfs==3.8.0
 
-# Google Cloud AI Platform
+# -------- Google Cloud AI Platform --------
 google-cloud-aiplatform
 
-# Optional: workflow management
+# -------- Optional: workflow management --------
+# Excluded during CI/CD because it’s heavy
 apache-airflow
