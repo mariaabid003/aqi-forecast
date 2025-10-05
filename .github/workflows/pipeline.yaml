@@ -1,10 +1,10 @@
 name: Run AQI Pipeline
 
 on:
-  workflow_dispatch:  # allow manual trigger
+  workflow_dispatch:  # Manual trigger
   schedule:
-    - cron: "0 * * * *"  # every hour for feature backfill
-    - cron: "0 0 * * *"  # daily retraining at midnight
+    - cron: "0 * * * *"    # Every hour — feature backfill
+    - cron: "0 0 * * *"    # Every day at midnight — retraining
 
 jobs:
   run-pipeline:
@@ -12,13 +12,13 @@ jobs:
 
     steps:
       # -------------------------
-      # Checkout repo
+      # 1. Checkout repository
       # -------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
       # -------------------------
-      # Set up Python
+      # 2. Set up Python
       # -------------------------
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -26,47 +26,63 @@ jobs:
           python-version: "3.10"
 
       # -------------------------
-      # Install dependencies
+      # 3. Install dependencies
       # -------------------------
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # Exclude Airflow in CI (too heavy)
+          # Avoid installing Airflow (too heavy for CI)
           grep -v apache-airflow requirements.txt > requirements-ci.txt
           pip install -r requirements-ci.txt
 
       # -------------------------
-      # Run Feature Pipeline
+      # 4. Environment variables
+      # -------------------------
+      - name: Set environment variables
+        run: echo "Environment variables loaded successfully."
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
+          aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
+
+      # -------------------------
+      # 5. Run Feature Backfill
       # -------------------------
       - name: Run Feature Backfill
         env:
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
           AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
+          aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
         run: python features/backfill.py
 
       # -------------------------
-      # Train Models
+      # 6. Train Sklearn Model
       # -------------------------
       - name: Train Sklearn Model
         env:
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
           AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
+          aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
         run: python trainings/train_sklearn.py
 
+      # -------------------------
+      # 7. Train TensorFlow Model
+      # -------------------------
       - name: Train TensorFlow Model
         env:
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
           AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
+          aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
         run: python trainings/train_tf.py
 
       # -------------------------
-      # Evaluate Models
+      # 8. Evaluate Models
       # -------------------------
       - name: Evaluate Models
         run: python trainings/evaluate.py
 
       # -------------------------
-      # Save Artifacts
+      # 9. Upload Artifacts (models + logs)
       # -------------------------
       - name: Upload Artifacts (models, logs)
         uses: actions/upload-artifact@v4
