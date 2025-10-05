@@ -8,6 +8,7 @@ shap
 streamlit>=1.30.0
 flask
 apache-airflow
+hopsworks>=3.0.7
 hsfs>=3.0.7
 google-cloud-aiplatform
 python-dotenv

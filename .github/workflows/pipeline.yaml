@@ -1,10 +1,9 @@
 name: Run AQI Pipeline
 
 on:
-  workflow_dispatch:  # Manual trigger
-  schedule:
-    - cron: "0 * * * *"    # Every hour — feature backfill
-    - cron: "0 0 * * *"    # Every day at midnight — retraining
+  on:
+  workflow_dispatch:
+
 
 jobs:
   run-pipeline:
