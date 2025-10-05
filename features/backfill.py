@@ -159,6 +159,10 @@ def backfill(out_file="data/features/training_dataset"):
                 df_new[col] = df_new[col].astype("float64", errors="ignore")
 
         print("📤 Inserting data to Hopsworks Feature Store...")
+        
+        print(hopsworks.__version__)
+
+        
         fg.insert(df_new)
         print("🚀 Real data successfully pushed to Hopsworks.")
     else:
