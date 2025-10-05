@@ -19,7 +19,6 @@ CITY = "Karachi"
 LAT = 24.8607
 LON = 67.0011
 
-
 # --- Fetch current data from APIs ---
 def fetch_current_weather():
     """Fetch current weather data from OpenWeather API."""
@@ -34,7 +33,6 @@ def fetch_current_weather():
         print("⚠️ Error fetching weather:", e)
         return {}
 
-
 def fetch_current_aqi():
     """Fetch current air quality data from AQICN API."""
     try:
@@ -47,7 +45,6 @@ def fetch_current_aqi():
     except Exception as e:
         print("⚠️ Error fetching AQI:", e)
         return {}
-
 
 # --- Build dataframe from real data ---
 def fetch_real_data():
@@ -106,7 +103,6 @@ def fetch_real_data():
     print(df.head())
     return df
 
-
 # --- Backfill and push to Hopsworks ---
 def backfill(out_file="data/features/training_dataset"):
     os.makedirs("data/features", exist_ok=True)
@@ -143,7 +139,7 @@ def backfill(out_file="data/features/training_dataset"):
             event_time="timestamp_utc",
         )
 
-        # ✅ Ensure correct dtypes
+        # Ensure correct dtypes
         int_cols = [
             "ow_pressure", "ow_humidity", "ow_wind_deg", "ow_clouds",
             "hour", "day", "month", "weekday"
@@ -167,7 +163,6 @@ def backfill(out_file="data/features/training_dataset"):
         print("🚀 Real data successfully pushed to Hopsworks.")
     else:
         print("⚠️ Missing HOPSWORKS_API_KEY – skipping upload.")
-
 
 if __name__ == "__main__":
     if not OW_KEY:
