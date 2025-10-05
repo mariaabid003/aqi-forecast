@@ -2,3 +2,7 @@ venv/
 __pycache__/
 .env
 data/
+# Python virtual environments
+tfenv/
+# Temporary files
+old.txt

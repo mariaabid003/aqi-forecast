@@ -1,81 +1,94 @@
+import os
 import pandas as pd
 import numpy as np
-from tensorflow.keras.models import load_model
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import hopsworks
 import joblib
-import os
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import tensorflow as tf
 
-# ----------------------------
-# Paths
-# ----------------------------
-DATA_PATH = "data/features/training_dataset.csv"  # or .parquet
-TF_MODEL_PATH = "models/tf_model.keras"
-TF_SCALER_PATH = "models/tf_scaler.joblib"
-RF_MODEL_PATH = "models/rf_model.joblib"
-RF_SCALER_PATH = "models/rf_scaler.joblib"
+# -----------------------------
+# CONFIGURATION
+# -----------------------------
+TARGET_COL = "aqi_aqicn"
+FEATURE_GROUP_NAME = "aqi_features"
+FEATURE_GROUP_VERSION = 1
+MODEL_DIR = "models"
 
-# ----------------------------
-# Load dataset
-# ----------------------------
-df = pd.read_csv(DATA_PATH)
-print(f"✅ Dataset loaded: {len(df)} rows")
+# Choose which model to evaluate: "sklearn" or "tensorflow"
+MODEL_TYPE = "sklearn"  # change to "tensorflow" for TF model
 
-# Forward-fill missing values
+# -----------------------------
+# CONNECT TO HOPSWORKS
+# -----------------------------
+print("🔐 Connecting to Hopsworks...")
+project = hopsworks.login()
+fs = project.get_feature_store()
+
+# -----------------------------
+# LOAD DATA FROM FEATURE GROUP
+# -----------------------------
+try:
+    feature_group = fs.get_feature_group(name=FEATURE_GROUP_NAME, version=FEATURE_GROUP_VERSION)
+except Exception as e:
+    raise ValueError(f"🚨 Feature group '{FEATURE_GROUP_NAME}' not found ({e})")
+
+df = feature_group.read()
+df.replace([np.inf, -np.inf], np.nan, inplace=True)
 df.ffill(inplace=True)
+df.bfill(inplace=True)
+df = df.dropna(subset=[TARGET_COL])
 
-# ----------------------------
-# Features and Target
-# ----------------------------
-TARGET = "aqi_aqicn"
-non_numeric_cols = ["timestamp_utc"]
+if TARGET_COL not in df.columns:
+    raise ValueError(f"🚨 Target column '{TARGET_COL}' not found in dataset.")
 
-df_aqi = df.drop(columns=non_numeric_cols)
-FEATURES = df_aqi.drop(columns=[TARGET]).columns.tolist()
-X = df_aqi[FEATURES].values
-y = df_aqi[TARGET].values
+X = df.drop(columns=[TARGET_COL])
+y = df[TARGET_COL]
 
-print("Evaluation features:", FEATURES)
+print("✅ Data loaded for evaluation!")
+print(f"Features shape: {X.shape}, Target shape: {y.shape}")
 
-# ----------------------------
-# TensorFlow Model Evaluation
-# ----------------------------
-# Load scaler and scale features
-tf_scaler = joblib.load(TF_SCALER_PATH)
-X_scaled_tf = tf_scaler.transform(X)
-print(f"✅ TensorFlow scaler loaded from {TF_SCALER_PATH}")
+# -----------------------------
+# LOAD SCALER AND TRANSFORM DATA
+# -----------------------------
+if MODEL_TYPE == "sklearn":
+    SCALER_FILE = os.path.join(MODEL_DIR, "rf_scaler.joblib")
+elif MODEL_TYPE == "tensorflow":
+    SCALER_FILE = os.path.join(MODEL_DIR, "tf_scaler.joblib")
+else:
+    raise ValueError("MODEL_TYPE must be 'sklearn' or 'tensorflow'")
 
-# Load model
-tf_model = load_model(TF_MODEL_PATH)
-print(f"✅ TensorFlow model loaded from {TF_MODEL_PATH}")
+if not os.path.exists(SCALER_FILE):
+    raise FileNotFoundError(f"Scaler file not found: {SCALER_FILE}")
 
-# Predict & evaluate
-y_pred_tf = tf_model.predict(X_scaled_tf, verbose=0).flatten()
-rmse_tf = np.sqrt(mean_squared_error(y, y_pred_tf))
-mae_tf = mean_absolute_error(y, y_pred_tf)
+scaler = joblib.load(SCALER_FILE)
+X_scaled = scaler.transform(X)
 
-print("\n📊 TensorFlow Model Evaluation:")
-print(f"RMSE: {rmse_tf:.2f}")
-print(f"MAE: {mae_tf:.2f}")
+# -----------------------------
+# LOAD MODEL AND PREDICT
+# -----------------------------
+if MODEL_TYPE == "sklearn":
+    MODEL_FILE = os.path.join(MODEL_DIR, "rf_model.joblib")
+    if not os.path.exists(MODEL_FILE):
+        raise FileNotFoundError(f"Sklearn model file not found: {MODEL_FILE}")
+    model = joblib.load(MODEL_FILE)
+    y_pred = model.predict(X_scaled)
+elif MODEL_TYPE == "tensorflow":
+    MODEL_FILE = os.path.join(MODEL_DIR, "tf_model.keras")
+    if not os.path.exists(MODEL_FILE):
+        raise FileNotFoundError(f"TensorFlow model file not found: {MODEL_FILE}")
+    model = tf.keras.models.load_model(MODEL_FILE)
+    y_pred = model.predict(X_scaled).flatten()
 
-# ----------------------------
-# Sklearn Random Forest Evaluation
-# ----------------------------
-# Load scaler and model
-rf_scaler = joblib.load(RF_SCALER_PATH)
-X_scaled_rf = rf_scaler.transform(X)
-rf_model = joblib.load(RF_MODEL_PATH)
-print(f"\n✅ Sklearn scaler loaded from {RF_SCALER_PATH}")
-print(f"✅ Sklearn model loaded from {RF_MODEL_PATH}")
+# -----------------------------
+# EVALUATE MODEL
+# -----------------------------
+rmse = np.sqrt(mean_squared_error(y, y_pred))
+mae = mean_absolute_error(y, y_pred)
+r2 = r2_score(y, y_pred)
 
-# Predict & evaluate
-y_pred_rf = rf_model.predict(X_scaled_rf)
-rmse_rf = np.sqrt(mean_squared_error(y, y_pred_rf))
-mae_rf = mean_absolute_error(y, y_pred_rf)
-r2_rf = r2_score(y, y_pred_rf)
+print(f"\n📊 Evaluation Results for {MODEL_TYPE} model:")
+print(f"RMSE: {rmse:.4f}")
+print(f"MAE: {mae:.4f}")
+print(f"R²: {r2:.4f}")
 
-print("\n📊 Random Forest Model Evaluation:")
-print(f"RMSE: {rmse_rf:.2f}")
-print(f"MAE: {mae_rf:.2f}")
-print(f"R²: {r2_rf:.2f}")
+print("\n🏁 Evaluation completed successfully!")
