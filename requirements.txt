@@ -10,9 +10,9 @@ streamlit>=1.30.0
 flask
 python-dotenv
 
-# Hopsworks Feature Store (compatible with Python 3.10)
-hopsworks==3.7.0
-hsfs==3.7.9
+# Hopsworks Feature Store (match backend 4.2.2)
+hopsworks==4.2.2
+hsfs==4.2.2
 
 # Google Cloud AI Platform
 google-cloud-aiplatform
