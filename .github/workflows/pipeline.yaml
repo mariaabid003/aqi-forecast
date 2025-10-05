@@ -1,9 +1,7 @@
 name: Run AQI Pipeline
 
 on:
-  on:
-  workflow_dispatch:
-
+  workflow_dispatch:  # Manual trigger only
 
 jobs:
   run-pipeline:
@@ -35,17 +33,7 @@ jobs:
           pip install -r requirements-ci.txt
 
       # -------------------------
-      # 4. Environment variables
-      # -------------------------
-      - name: Set environment variables
-        run: echo "Environment variables loaded successfully."
-        env:
-          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-          AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
-          aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
-
-      # -------------------------
-      # 5. Run Feature Backfill
+      # 4. Run Feature Backfill
       # -------------------------
       - name: Run Feature Backfill
         env:
@@ -55,7 +43,7 @@ jobs:
         run: python features/backfill.py
 
       # -------------------------
-      # 6. Train Sklearn Model
+      # 5. Train Sklearn Model
       # -------------------------
       - name: Train Sklearn Model
         env:
@@ -65,7 +53,7 @@ jobs:
         run: python trainings/train_sklearn.py
 
       # -------------------------
-      # 7. Train TensorFlow Model
+      # 6. Train TensorFlow Model
       # -------------------------
       - name: Train TensorFlow Model
         env:
@@ -75,13 +63,13 @@ jobs:
         run: python trainings/train_tf.py
 
       # -------------------------
-      # 8. Evaluate Models
+      # 7. Evaluate Models
       # -------------------------
       - name: Evaluate Models
         run: python trainings/evaluate.py
 
       # -------------------------
-      # 9. Upload Artifacts (models + logs)
+      # 8. Upload Artifacts (models + logs)
       # -------------------------
       - name: Upload Artifacts (models, logs)
         uses: actions/upload-artifact@v4
