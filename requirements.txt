@@ -10,7 +10,7 @@ streamlit>=1.30.0
 flask
 python-dotenv
 
-# Hopsworks Feature Store (match backend 4.2.2)
+# Hopsworks Feature Store (for backend 4.2.2)
 hopsworks==4.2.2
 hsfs==4.2.2
 
