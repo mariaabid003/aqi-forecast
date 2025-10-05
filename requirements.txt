@@ -11,10 +11,9 @@ flask
 python-dotenv
 
 # Cloud & Feature Store
-hopsworks==4.2.*
-hsfs==4.2.*
+hopsworks==3.7.0
+hsfs==3.7.0
 google-cloud-aiplatform
 
 # Workflow orchestration
 apache-airflow
-
