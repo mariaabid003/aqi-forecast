@@ -5,7 +5,7 @@ import numpy as np
 from datetime import datetime, timezone
 import requests
 from dotenv import load_dotenv
-import hopsworks
+import hopsworks  # hsfs 3.7.9
 
 # --- Load environment variables ---
 load_dotenv()
@@ -21,26 +21,20 @@ LON = 67.0011
 
 # --- Fetch current data from APIs ---
 def fetch_current_weather():
-    """Fetch current weather data from OpenWeather API."""
     try:
         url = f"https://api.openweathermap.org/data/2.5/weather?lat={LAT}&lon={LON}&appid={OW_KEY}&units=metric"
         resp = requests.get(url, timeout=10)
-        if resp.status_code != 200:
-            print(f"⚠️ Failed to fetch weather: {resp.status_code}")
-            return {}
+        resp.raise_for_status()
         return resp.json()
     except Exception as e:
         print("⚠️ Error fetching weather:", e)
         return {}
 
 def fetch_current_aqi():
-    """Fetch current air quality data from AQICN API."""
     try:
         url = f"https://api.waqi.info/feed/geo:{LAT};{LON}/?token={AQICN_TOKEN}"
         resp = requests.get(url, timeout=10)
-        if resp.status_code != 200:
-            print(f"⚠️ Failed to fetch AQI: {resp.status_code}")
-            return {}
+        resp.raise_for_status()
         return resp.json().get("data", {})
     except Exception as e:
         print("⚠️ Error fetching AQI:", e)
@@ -48,7 +42,6 @@ def fetch_current_aqi():
 
 # --- Build dataframe from real data ---
 def fetch_real_data():
-    """Fetch and structure live data from OpenWeather + AQICN."""
     print("🌍 Fetching real AQI and weather data...")
     weather = fetch_current_weather()
     aqi = fetch_current_aqi()
@@ -94,13 +87,12 @@ def fetch_real_data():
 
     df = pd.DataFrame([row])
 
-    # Clean numeric types
+    # Convert numeric columns safely
     for col in df.columns:
         if col != "timestamp_utc":
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     print("✅ Real-time data fetched successfully!")
-    print(df.head())
     return df
 
 # --- Backfill and push to Hopsworks ---
@@ -159,10 +151,6 @@ def backfill(out_file="data/features/training_dataset"):
                 df_new[col] = df_new[col].astype("float64", errors="ignore")
 
         print("📤 Inserting data to Hopsworks Feature Store...")
-        
-        print(hopsworks.__version__)
-
-        
         fg.insert(df_new)
         print("🚀 Real data successfully pushed to Hopsworks.")
     else:
