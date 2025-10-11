@@ -1,7 +1,7 @@
-name: Run AQI Pipeline
+name: Run AQI Forecasting Pipeline
 
 on:
-  workflow_dispatch:  # Manual trigger only
+  workflow_dispatch:  # Manual trigger for now (you can add 'schedule:' later)
 
 jobs:
   run-pipeline:
@@ -39,53 +39,68 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # Avoid installing Apache Airflow during CI (too heavy)
+          # Avoid heavy packages like Airflow in CI
           grep -v apache-airflow requirements.txt > requirements-ci.txt
           pip install -r requirements-ci.txt
 
       # -------------------------
-      # 5. Run Feature Backfill
+      # 5. Run Backfill (Historical Features)
       # -------------------------
       - name: Run Feature Backfill
         env:
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
           AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
           aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
+          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
         run: python features/backfill.py
 
       # -------------------------
-      # 6. Train Sklearn Model
+      # 6. Train Sklearn Model (Primary)
       # -------------------------
       - name: Train Sklearn Model
         env:
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
           AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
           aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
+          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
         run: python trainings/train_sklearn.py
 
       # -------------------------
-      # 7. Train TensorFlow Model
+      # 7. Train TensorFlow Model (Secondary)
       # -------------------------
       - name: Train TensorFlow Model
         env:
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
           AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
           aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
+          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
         run: python trainings/train_tf.py
 
       # -------------------------
-      # 8. Evaluate Models
+      # 8. Evaluate Models (optional, can skip if metrics already logged)
       # -------------------------
       - name: Evaluate Models
         run: python trainings/evaluate.py
 
       # -------------------------
-      # 9. Upload Artifacts (models + logs)
+      # 9. Predict Next 3 Days Forecast
       # -------------------------
-      - name: Upload Artifacts (models, logs)
+      - name: Generate 3-Day Forecast
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
+          aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
+          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+        run: python predict.py
+
+      # -------------------------
+      # 10. Upload Artifacts (models, logs, forecast)
+      # -------------------------
+      - name: Upload Artifacts (models, logs, forecast)
         uses: actions/upload-artifact@v4
         with:
-          name: aqi-models
+          name: aqi-artifacts
           path: |
             models/
             logs/
+            data/forecast_next_3_days.csv

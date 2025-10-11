@@ -1,27 +1,31 @@
-# scheduler.py
 import schedule
 import time
 import subprocess
-import pandas as pd
 import os
+from datetime import datetime
 
 def run_backfill():
-    print("⏳ Running backfill.py...")
-    subprocess.run(["python", "features/backfill.py"], check=True)
+    backfill_path = os.path.join(os.getcwd(), "features", "backfill.py")
 
-    # After backfill, show current dataset size
-    csv_path = "data/features/training_dataset.csv"
-    if os.path.exists(csv_path):
-        df = pd.read_csv(csv_path)
-        print(f"📊 Current dataset size: {len(df)} rows")
-    else:
-        print("⚠️ No dataset file found yet.")
+    if not os.path.exists(backfill_path):
+        print(f"🚨 backfill.py not found at: {backfill_path}")
+        return
+
+    print(f"🕐 Running backfill at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ...")
+    try:
+        subprocess.run(["python", backfill_path], check=True)
+        print("✅ Backfill run complete.\n")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Backfill failed with error code {e.returncode}")
+    except Exception as e:
+        print(f"⚠️ Unexpected error during backfill: {e}")
 
 # Run every 15 minutes
 schedule.every(15).minutes.do(run_backfill)
 
-print("✅ Scheduler started. Running backfill every 15 minutes...")
+print("🚀 Scheduler started. Running every 15 minutes...")
+
 while True:
     schedule.run_pending()
-    time.sleep(10)
+    time.sleep(60)
 
