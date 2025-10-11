@@ -15,10 +15,15 @@ FEATURE_GROUP_VERSION = 1
 MODEL_DIR = "models"
 
 # -----------------------------
-# CONNECT TO HOPSWORKS
+# CONNECT TO HOPSWORKS (Non-interactive)
 # -----------------------------
 print("🔐 Connecting to Hopsworks...")
-project = hopsworks.login()
+
+HOPSWORKS_API_KEY = os.getenv("HOPSWORKS_API_KEY") or os.getenv("aqi_forecast_api_key")
+if not HOPSWORKS_API_KEY:
+    raise ValueError("❌ Missing Hopsworks API key! Please set it as an environment variable.")
+
+project = hopsworks.login(api_key_value=HOPSWORKS_API_KEY)
 fs = project.get_feature_store()
 
 # -----------------------------
@@ -27,7 +32,7 @@ fs = project.get_feature_store()
 try:
     feature_group = fs.get_feature_group(name=FEATURE_GROUP_NAME, version=FEATURE_GROUP_VERSION)
 except Exception as e:
-    raise ValueError(f"🚨 Feature group '{FEATURE_GROUP_NAME}' not found ({e})")
+    raise ValueError(f"🚨 Feature group '{FEATURE_GROUP_NAME}' not found: {e}")
 
 df = feature_group.read()
 df.replace([np.inf, -np.inf], np.nan, inplace=True)
@@ -41,14 +46,14 @@ if TARGET_COL not in df.columns:
 X = df.drop(columns=[TARGET_COL])
 y = df[TARGET_COL]
 
-# Drop timestamp or any non-numeric columns if they exist
+# Drop timestamp or non-numeric columns if present
 X = X.select_dtypes(include=[np.number])
 
 print("✅ Data loaded for evaluation!")
 print(f"Features shape: {X.shape}, Target shape: {y.shape}")
 
 # -----------------------------
-# DEFINE A FUNCTION TO EVALUATE MODELS
+# DEFINE EVALUATION FUNCTION
 # -----------------------------
 def evaluate_model(model_type, model_file, scaler_file):
     """Evaluate a given model and return metrics."""
@@ -77,6 +82,8 @@ def evaluate_model(model_type, model_file, scaler_file):
     rmse = np.sqrt(mean_squared_error(y, y_pred))
     mae = mean_absolute_error(y, y_pred)
     r2 = r2_score(y, y_pred)
+
+    print(f"✅ {model_type} - RMSE: {rmse:.2f}, MAE: {mae:.2f}, R²: {r2:.2f}")
 
     return {"Model": model_type, "RMSE": rmse, "MAE": mae, "R²": r2}
 
