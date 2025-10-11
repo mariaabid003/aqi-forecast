@@ -1,7 +1,7 @@
 name: Run AQI Forecasting Pipeline
 
 on:
-  workflow_dispatch:  # Manual trigger for now (you can add 'schedule:' later)
+  workflow_dispatch:  # Manual trigger for now (can add 'schedule:' later)
 
 jobs:
   run-pipeline:
@@ -42,9 +42,11 @@ jobs:
           # Avoid heavy packages like Airflow in CI
           grep -v apache-airflow requirements.txt > requirements-ci.txt
           pip install -r requirements-ci.txt
+          # ✅ Ensure Kafka dependencies for Hopsworks
+          pip install "hopsworks[python]" || pip install confluent-kafka
 
       # -------------------------
-      # 5. Run Backfill (Historical Features)
+      # 5. Run Feature Backfill
       # -------------------------
       - name: Run Feature Backfill
         env:
@@ -77,13 +79,13 @@ jobs:
         run: python trainings/train_tf.py
 
       # -------------------------
-      # 8. Evaluate Models (optional, can skip if metrics already logged)
+      # 8. Evaluate Models
       # -------------------------
       - name: Evaluate Models
         run: python trainings/evaluate.py
 
       # -------------------------
-      # 9. Predict Next 3 Days Forecast
+      # 9. Generate 3-Day Forecast
       # -------------------------
       - name: Generate 3-Day Forecast
         env:
@@ -91,10 +93,10 @@ jobs:
           AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
           aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
           HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
-        run: python predict.py
+        run: python trainings/predict.py
 
       # -------------------------
-      # 10. Upload Artifacts (models, logs, forecast)
+      # 10. Upload Artifacts
       # -------------------------
       - name: Upload Artifacts (models, logs, forecast)
         uses: actions/upload-artifact@v4

@@ -16,8 +16,7 @@ flask
 python-dotenv
 
 # Hopsworks Feature Store (client version aligned with backend 4.2.2)
-hopsworks==4.2.8
+hopsworks[python]==4.2.8
 
-# Google Cloud AI Platform
-google-cloud-aiplatform
+
 
