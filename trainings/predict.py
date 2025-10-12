@@ -1,137 +1,95 @@
 import os
+import joblib
 import pandas as pd
 import numpy as np
 import hopsworks
-import joblib
-from datetime import timedelta
 from dotenv import load_dotenv
+import tensorflow as tf
+from datetime import datetime, timedelta
 
-# ----------------------------------
-# CONFIGURATION
-# ----------------------------------
-MODEL_DIR = "models"
-FEATURE_GROUP_NAME = "aqi_features"
-FEATURE_GROUP_VERSION = 1
-TARGET_COL = "aqi_aqicn"
-FORECAST_DAYS = 3
+# -----------------------------
+# 🔐 Connect to Hopsworks
+# -----------------------------
+load_dotenv()
+HOPSWORKS_API_KEY = os.getenv("aqi_forecast_api_key")
+if not HOPSWORKS_API_KEY:
+    raise ValueError("❌ Missing Hopsworks API key!")
 
-# The same 14 features used during training
+project = hopsworks.login(api_key_value=HOPSWORKS_API_KEY)
+fs = project.get_feature_store()
+
+# -----------------------------
+# 📥 Load Feature Data
+# -----------------------------
+fg = fs.get_feature_group(name="aqi_features", version=1)
+df = fg.read()
+df.replace([np.inf, -np.inf], np.nan, inplace=True)
+df.ffill(inplace=True)
+df.bfill(inplace=True)
+
+TARGET = "aqi_aqicn"
 FEATURE_COLS = [
     "ow_temp", "ow_pressure", "ow_humidity", "ow_wind_speed", "ow_wind_deg",
     "ow_clouds", "ow_co", "ow_no2", "ow_pm2_5", "ow_pm10",
     "hour", "day", "month", "weekday"
 ]
 
-# ----------------------------------
-# LOAD ENV VARIABLES & CONNECT
-# ----------------------------------
-load_dotenv()
-HOPSWORKS_API_KEY = os.getenv("aqi_forecast_api_key")
+df = df.drop(columns=["timestamp_utc"], errors="ignore")
+df = df.dropna(subset=[TARGET] + FEATURE_COLS)
 
-print("🔐 Connecting to Hopsworks...")
-project = hopsworks.login(api_key_value=HOPSWORKS_API_KEY)
-fs = project.get_feature_store()
+# -----------------------------
+# 🔄 Load Model & Scalers
+# -----------------------------
+model_path = "models/tf_lstm_model.keras"
+scaler_X_path = "models/tf_scaler.joblib"
+scaler_y_path = "models/tf_y_scaler.joblib"
 
-# ----------------------------------
-# LOAD LATEST FEATURES
-# ----------------------------------
-print("📥 Loading latest feature data from Hopsworks...")
-feature_group = fs.get_feature_group(
-    name=FEATURE_GROUP_NAME, version=FEATURE_GROUP_VERSION
-)
+model = tf.keras.models.load_model(model_path)
+scaler_X = joblib.load(scaler_X_path)
+scaler_y = joblib.load(scaler_y_path)
 
-df = feature_group.read()
-df.replace([np.inf, -np.inf], np.nan, inplace=True)
-df.ffill(inplace=True)
-df.bfill(inplace=True)
+# -----------------------------
+# 🔁 Create Input Sequence (last 7 days)
+# -----------------------------
+SEQUENCE_LENGTH = 7
+latest_seq = df[FEATURE_COLS].iloc[-SEQUENCE_LENGTH:].values
+latest_seq = latest_seq.reshape((1, SEQUENCE_LENGTH, len(FEATURE_COLS)))
 
-# Drop rows without target and sort
-df = df.dropna(subset=[TARGET_COL])
-df.sort_values("timestamp_utc", inplace=True)
+# Scale features
+nsamples, ntimesteps, nfeatures = latest_seq.shape
+latest_scaled = scaler_X.transform(latest_seq.reshape(nsamples*ntimesteps, nfeatures))
+latest_scaled = latest_scaled.reshape((nsamples, ntimesteps, nfeatures))
 
-# Get the latest row as base input
-latest_row = df.iloc[-1:].copy()
-print(f"✅ Latest record timestamp: {latest_row['timestamp_utc'].values[0]}")
+# -----------------------------
+# 🔮 Forecast next 3 days
+# -----------------------------
+FORECAST_DAYS = 3
+preds = []
+timestamps = []
 
-# ----------------------------------
-# LOAD MODEL AND SCALER
-# ----------------------------------
-scaler_path = os.path.join(MODEL_DIR, "rf_scaler.joblib")
-model_path = os.path.join(MODEL_DIR, "rf_model.joblib")
-
-if not os.path.exists(scaler_path) or not os.path.exists(model_path):
-    raise FileNotFoundError("❌ Model or scaler files not found in models/ folder.")
-
-scaler = joblib.load(scaler_path)
-model = joblib.load(model_path)
-
-# Keep only the features used during training
-X_latest = latest_row[FEATURE_COLS].copy()
-
-# ----------------------------------
-# FORECAST LOOP (3 sequential days)
-# ----------------------------------
-predictions = []
-base_timestamp = pd.to_datetime(latest_row["timestamp_utc"].values[0])
-
-print("\n🔮 Forecasting next 3 days of AQI...")
+base_ts = pd.to_datetime(df.index[-1] if df.index.dtype.kind == 'M' else datetime.utcnow())
 
 for i in range(FORECAST_DAYS):
-    # Scale features
-    X_scaled = scaler.transform(X_latest)
+    pred_scaled = model.predict(latest_scaled, verbose=0)
+    pred_aqi = scaler_y.inverse_transform(pred_scaled.reshape(-1, 1))[0, 0]  # inverse-transform
+    preds.append(pred_aqi)
+    next_ts = base_ts + pd.Timedelta(days=i+1)
+    timestamps.append(next_ts)
 
-    # Predict AQI
-    predicted_aqi = model.predict(X_scaled)[0]
-    predictions.append(predicted_aqi)
+    # Prepare next input sequence by appending predicted features
+    # For simplicity, we just shift the window, repeat last known features
+    next_input = latest_scaled[:, 1:, :]  # drop oldest
+    last_features = latest_scaled[:, -1:, :]  # last timestep
+    next_input = np.concatenate([next_input, last_features], axis=1)
+    latest_scaled = next_input
 
-    # Prepare next day's features (simple temporal shift)
-    next_input = X_latest.copy()
-    next_input["day"] = (next_input["day"] + 1).clip(upper=31)
-    next_input["weekday"] = (next_input["weekday"] + 1) % 7
-    next_input["month"] = base_timestamp.month  # keep same month
-
-    # Simulate slight atmospheric progression
-    next_input["ow_pm2_5"] *= 1.02
-    next_input["ow_pm10"] *= 1.02
-    next_input["ow_no2"] *= 1.01
-
-    X_latest = next_input  # feed this to next iteration
-
-# ----------------------------------
-# STORE RESULTS
-# ----------------------------------
-future_dates = pd.date_range(
-    start=base_timestamp + timedelta(days=1),
-    periods=FORECAST_DAYS,
-    freq="D"
-)
-
+# -----------------------------
+# 📋 Display Forecast
+# -----------------------------
 forecast_df = pd.DataFrame({
-    "forecast_date": future_dates,
-    "predicted_aqi": np.round(predictions, 2)
+    "forecast_date": timestamps,
+    "predicted_aqi": preds
 })
-
-# Save locally for dashboard
-os.makedirs("data", exist_ok=True)
-forecast_csv = os.path.join("data", "forecast_next_3_days.csv")
-forecast_df.to_csv(forecast_csv, index=False)
 
 print("\n🌤️ AQI Forecast for Next 3 Days:")
 print(forecast_df)
-
-# ----------------------------------
-# OPTIONAL: SAVE FORECAST TO HOPSWORKS FEATURE GROUP
-# ----------------------------------
-try:
-    forecast_fg = fs.get_or_create_feature_group(
-        name="aqi_forecasts",
-        version=1,
-        primary_key=["forecast_date"],
-        description="Predicted AQI values for next 3 days"
-    )
-    forecast_fg.insert(forecast_df, write_options={"wait_for_job": False})
-    print("🚀 Forecast uploaded to Hopsworks Feature Store!")
-except Exception as e:
-    print(f"⚠️ Could not upload forecast to Feature Store: {e}")
-
-print("\n🏁 3-Day Forecast Generation Complete!")

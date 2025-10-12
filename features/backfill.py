@@ -85,13 +85,8 @@ def fetch_real_data():
     return df
 
 
-# --- Push to Hopsworks ---
+# --- Full backfill and historic update ---
 def backfill():
-    df_new = fetch_real_data()
-    if df_new.empty:
-        print("⚠️ No new data fetched.")
-        return
-
     if not HOPSWORKS_API_KEY:
         print("❌ Missing HOPSWORKS_API_KEY. Cannot upload.")
         return
@@ -100,45 +95,69 @@ def backfill():
     project = hopsworks.login(api_key_value=HOPSWORKS_API_KEY)
     fs = project.get_feature_store()
 
-    # --- Data cleaning ---
-    df_new["timestamp_utc"] = pd.to_datetime(df_new["timestamp_utc"], utc=True, errors="coerce")
+    # --- Load existing feature group if it exists ---
+    try:
+        fg = fs.get_feature_group(name="aqi_features", version=1)
+        df_existing = fg.read()
+        print(f"ℹ️ Loaded {len(df_existing)} existing rows from Hopsworks.")
+    except:
+        df_existing = pd.DataFrame()
+        fg = fs.get_or_create_feature_group(
+            name="aqi_features",
+            version=1,
+            description="AQI + weather dataset for Karachi",
+            primary_key=["timestamp_utc"],
+            event_time="timestamp_utc",
+        )
+        print("ℹ️ Feature group created as it did not exist.")
 
-    # Columns expected as integers (Hopsworks schema uses BIGINT)
-    int_columns = [
-        "ow_pressure", "ow_humidity", "ow_wind_deg", "ow_clouds",
-        "ow_pm2_5", "ow_pm10", "aqi_aqicn",
-        "hour", "day", "month", "weekday"
+    # --- Fetch new data ---
+    df_new = fetch_real_data()
+
+    # --- Combine old + new ---
+    if not df_existing.empty:
+        df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+    else:
+        df_combined = df_new
+
+    if df_combined.empty:
+        print("⚠️ No data to upload.")
+        return
+
+    # --- Convert timestamp and sort ---
+    df_combined["timestamp_utc"] = pd.to_datetime(df_combined["timestamp_utc"], utc=True, errors="coerce")
+    df_combined = df_combined.sort_values("timestamp_utc").reset_index(drop=True)
+
+    # --- Forward-fill missing numeric values ---
+    numeric_cols = [
+        "ow_temp", "ow_pressure", "ow_humidity", "ow_wind_speed",
+        "ow_wind_deg", "ow_clouds", "ow_co", "ow_no2",
+        "ow_pm2_5", "ow_pm10", "aqi_aqicn", "hour",
+        "day", "month", "weekday"
     ]
-    for col in int_columns:
-        if col in df_new.columns:
-            df_new[col] = df_new[col].fillna(0).astype("int64")
+    df_combined[numeric_cols] = df_combined[numeric_cols].ffill().fillna(0)
 
-    # Columns expected as floats
-    float_columns = ["ow_temp", "ow_wind_speed", "ow_no2", "ow_co"]
-    for col in float_columns:
-        if col in df_new.columns:
-            df_new[col] = df_new[col].fillna(0).astype(float)
+    # --- Ensure types ---
+    int_cols = ["ow_pressure", "ow_humidity", "ow_wind_deg", "ow_clouds",
+                "ow_pm2_5", "ow_pm10", "aqi_aqicn",
+                "hour", "day", "month", "weekday"]
+    float_cols = ["ow_temp", "ow_wind_speed", "ow_no2", "ow_co"]
 
-    # Fill remaining NaNs if any
-    df_new = df_new.fillna({
-        col: 0 for col in df_new.select_dtypes(include=["number"]).columns
-    })
+    for col in int_cols:
+        df_combined[col] = df_combined[col].astype("int64")
+    for col in float_cols:
+        df_combined[col] = df_combined[col].astype(float)
 
-    print("🧹 Cleaned DataFrame before upload:")
-    print(df_new.info())
+    # --- Deduplicate based on timestamp ---
+    df_combined = df_combined.drop_duplicates(subset=["timestamp_utc"], keep="last").reset_index(drop=True)
 
-    # --- Upload to Feature Store ---
-    fg = fs.get_or_create_feature_group(
-        name="aqi_features",
-        version=1,
-        description="AQI + weather dataset for Karachi",
-        primary_key=["timestamp_utc"],
-        event_time="timestamp_utc",
-    )
+    print("🧹 Cleaned & combined DataFrame info:")
+    print(df_combined.info())
 
-    print(f"📤 Uploading {len(df_new)} new row(s) to Hopsworks...")
-    fg.insert(df_new, write_options={"wait_for_job": True})
-    print("🚀 New data pushed successfully!")
+    # --- Upload entire cleaned dataset ---
+    print(f"📤 Uploading {len(df_combined)} rows to Hopsworks...")
+    fg.insert(df_combined, write_options={"wait_for_job": True})
+    print("🚀 Backfill completed successfully! All historical & new data updated.")
 
 
 # --- Entry Point ---
