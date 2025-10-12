@@ -1,9 +1,9 @@
 name: Run AQI Forecasting Pipeline
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:  # manual trigger
   schedule:
-    # ⏰ Runs at 12:00 AM and 12:00 PM UTC every day
+    # Runs at 12:00 AM and 12:00 PM UTC every day
     - cron: '0 0,12 * * *'
 
 jobs:
@@ -12,13 +12,13 @@ jobs:
 
     steps:
       # -------------------------
-      # 1️⃣ Checkout repository
+      # 1. Checkout repository
       # -------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
       # -------------------------
-      # 2️⃣ Set up Python 3.10
+      # 2. Set up Python 3.10
       # -------------------------
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -26,7 +26,7 @@ jobs:
           python-version: '3.10'
 
       # -------------------------
-      # 3️⃣ Cache pip dependencies
+      # 3. Cache pip dependencies
       # -------------------------
       - name: Cache pip packages
         uses: actions/cache@v3
@@ -37,7 +37,7 @@ jobs:
             ${{ runner.os }}-pip-
 
       # -------------------------
-      # 4️⃣ Install dependencies
+      # 4. Install dependencies
       # -------------------------
       - name: Install dependencies
         run: |
@@ -45,11 +45,11 @@ jobs:
           # Avoid heavy packages like Airflow in CI
           grep -v apache-airflow requirements.txt > requirements-ci.txt
           pip install -r requirements-ci.txt
-          # ✅ Ensure Hopsworks SDK + Kafka support
+          # ✅ Ensure Kafka & Hopsworks SDK support
           pip install "hopsworks[python]" || pip install confluent-kafka
 
       # -------------------------
-      # 5️⃣ Run Feature Backfill
+      # 5. Run Feature Backfill
       # -------------------------
       - name: Run Feature Backfill
         env:
@@ -60,7 +60,7 @@ jobs:
         run: python features/backfill.py
 
       # -------------------------
-      # 6️⃣ Train Sklearn Model (Primary)
+      # 6. Train Sklearn Model (Primary)
       # -------------------------
       - name: Train Sklearn Model
         env:
@@ -71,7 +71,7 @@ jobs:
         run: python trainings/train_sklearn.py
 
       # -------------------------
-      # 7️⃣ Train TensorFlow Model (Secondary)
+      # 7. Train TensorFlow Model (Secondary)
       # -------------------------
       - name: Train TensorFlow Model
         env:
@@ -82,7 +82,7 @@ jobs:
         run: python trainings/train_tf.py
 
       # -------------------------
-      # 8️⃣ Evaluate Models
+      # 8. Evaluate Models
       # -------------------------
       - name: Evaluate Models
         env:
@@ -91,7 +91,7 @@ jobs:
         run: python trainings/evaluate.py
 
       # -------------------------
-      # 9️⃣ Generate 3-Day Forecast
+      # 9. Generate 3-Day Forecast (and store CSV)
       # -------------------------
       - name: Generate 3-Day Forecast
         env:
@@ -99,25 +99,16 @@ jobs:
           AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
           aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
           HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
-        run: python trainings/predict.py
-
-      # -------------------------
-      # 🔟 Commit & Push Updated Forecast CSV
-      # -------------------------
-      - name: Commit and Push Forecast CSV
-        if: success()
         run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git pull --rebase
-          git add data/forecast_next_3_days.csv
-          git commit -m "🔄 Auto-update forecast on $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
-          git push
+          mkdir -p data
+          python trainings/predict.py
+          echo "✅ Forecast generated successfully"
+          cat data/forecast_next_3_days.csv || echo "⚠️ No forecast CSV found!"
 
       # -------------------------
-      # 11️⃣ Upload Artifacts (models, logs, forecast)
+      # 10. Upload Artifacts
       # -------------------------
-      - name: Upload Artifacts
+      - name: Upload Artifacts (models, logs, forecast)
         uses: actions/upload-artifact@v4
         with:
           name: aqi-artifacts
