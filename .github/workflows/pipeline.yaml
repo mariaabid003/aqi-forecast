@@ -42,4 +42,86 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # Avoid heavy pac
+          # Avoid heavy packages like Airflow in CI
+          grep -v apache-airflow requirements.txt > requirements-ci.txt
+          pip install -r requirements-ci.txt
+          # ✅ Ensure Hopsworks SDK + Kafka support
+          pip install "hopsworks[python]" || pip install confluent-kafka
+
+      # -------------------------
+      # 5️⃣ Run Feature Backfill
+      # -------------------------
+      - name: Run Feature Backfill
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
+          aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
+          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+        run: python features/backfill.py
+
+      # -------------------------
+      # 6️⃣ Train Sklearn Model (Primary)
+      # -------------------------
+      - name: Train Sklearn Model
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
+          aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
+          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+        run: python trainings/train_sklearn.py
+
+      # -------------------------
+      # 7️⃣ Train TensorFlow Model (Secondary)
+      # -------------------------
+      - name: Train TensorFlow Model
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
+          aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
+          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+        run: python trainings/train_tf.py
+
+      # -------------------------
+      # 8️⃣ Evaluate Models
+      # -------------------------
+      - name: Evaluate Models
+        env:
+          aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
+          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+        run: python trainings/evaluate.py
+
+      # -------------------------
+      # 9️⃣ Generate 3-Day Forecast
+      # -------------------------
+      - name: Generate 3-Day Forecast
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
+          aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
+          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+        run: python trainings/predict.py
+
+      # -------------------------
+      # 🔟 Commit & Push Updated Forecast CSV
+      # -------------------------
+      - name: Commit and Push Forecast CSV
+        if: success()
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git pull --rebase
+          git add data/forecast_next_3_days.csv
+          git commit -m "🔄 Auto-update forecast on $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
+          git push
+
+      # -------------------------
+      # 11️⃣ Upload Artifacts (models, logs, forecast)
+      # -------------------------
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: aqi-artifacts
+          path: |
+            models/
+            logs/
+            data/forecast_next_3_days.csv
