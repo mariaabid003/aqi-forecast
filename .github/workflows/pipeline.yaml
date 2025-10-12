@@ -42,7 +42,7 @@ jobs:
           # Avoid heavy packages like Airflow in CI
           grep -v apache-airflow requirements.txt > requirements-ci.txt
           pip install -r requirements-ci.txt
-          # ✅ Ensure Kafka dependencies for Hopsworks
+          # ✅ Ensure Kafka & Hopsworks SDK support
           pip install "hopsworks[python]" || pip install confluent-kafka
 
       # -------------------------
@@ -82,6 +82,9 @@ jobs:
       # 8. Evaluate Models
       # -------------------------
       - name: Evaluate Models
+        env:
+          aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
+          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
         run: python trainings/evaluate.py
 
       # -------------------------
