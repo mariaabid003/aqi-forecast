@@ -3,7 +3,7 @@
 --------------------------------------------------
 Features:
 ✅ Today's Forecast + Next 3-Day Forecast
-✅ SHAP Explainability (LSTM-safe, fallback included)
+✅ SHAP Explainability (LSTM-safe, fallback only)
 ✅ Forecast Chart, Heatmap, Summary Stats
 ✅ Elegant pastel design (lavender, pink, blue)
 """
@@ -118,6 +118,23 @@ except Exception as e:
     st.stop()
 
 # -----------------------------
+# 🧮 Helper — AQI Category
+# -----------------------------
+def aqi_category(aqi):
+    if aqi <= 50:
+        return "🟢 Good"
+    elif aqi <= 100:
+        return "🟡 Moderate"
+    elif aqi <= 150:
+        return "🟠 Unhealthy for Sensitive Groups"
+    elif aqi <= 200:
+        return "🔴 Unhealthy"
+    elif aqi <= 300:
+        return "🟣 Very Unhealthy"
+    else:
+        return "⚫ Hazardous"
+
+# -----------------------------
 # 🔮 Generate Forecast (Today + Next 3 Days)
 # -----------------------------
 SEQUENCE_LENGTH = 7
@@ -138,16 +155,23 @@ for i in range(FORECAST_DAYS):
     latest_scaled = next_input
 
 forecast_df = pd.DataFrame({"Date": timestamps, "Predicted AQI": preds})
+forecast_df["Category"] = forecast_df["Predicted AQI"].apply(aqi_category)
 
 # -----------------------------
 # 🌤️ Display Forecast
 # -----------------------------
 st.subheader("🌞 Today's Forecast")
 today_forecast = forecast_df.iloc[0]
-st.metric(label="Predicted AQI (Today)", value=f"{today_forecast['Predicted AQI']:.2f}")
+st.metric(
+    label=f"Predicted AQI (Today) — {today_forecast['Category']}",
+    value=f"{today_forecast['Predicted AQI']:.2f}"
+)
 
 st.subheader("📅 AQI Forecast for Next 3 Days")
-st.dataframe(forecast_df.iloc[1:].style.format({"Predicted AQI": "{:.2f}"}), use_container_width=True)
+st.dataframe(
+    forecast_df.iloc[1:].style.format({"Predicted AQI": "{:.2f}"}),
+    use_container_width=True
+)
 
 # -----------------------------
 # 📈 AQI History Chart
@@ -161,7 +185,7 @@ plt.ylabel("AQI")
 st.pyplot(plt.gcf())
 
 # -----------------------------
-# 🔥 Correlation Heatmap
+# 🔗 Correlation Heatmap
 # -----------------------------
 st.markdown("<h3 class='sub-header'>🔗 Feature Correlation Heatmap</h3>", unsafe_allow_html=True)
 corr = df[FEATURE_COLS + [TARGET]].corr()
@@ -170,57 +194,37 @@ sns.heatmap(corr, cmap="coolwarm", annot=False, ax=ax)
 st.pyplot(fig)
 
 # -----------------------------
+# 🧠 Explainability (Fallback Only)
 # -----------------------------
-# 🧠 Explainability (LSTM-safe with fallback)
-# -----------------------------
-st.markdown("<h3 class='sub-header'>🧠 Explainability (LSTM-safe)</h3>", unsafe_allow_html=True)
+st.markdown("<h3 class='sub-header'>🧠 Explainability</h3>", unsafe_allow_html=True)
+st.info("Falling back to approximate permutation importance...")
 
 try:
-    # Try SHAP first
-    try:
-        explainer = shap.DeepExplainer(model, latest_scaled)
-        shap_values = explainer.shap_values(latest_scaled)
-        shap.initjs()
-        st.set_option("deprecation.showPyplotGlobalUse", False)
-        plt.figure(facecolor="#f3e5f5")
-        shap.summary_plot(
-            shap_values[0] if isinstance(shap_values, list) else shap_values,
-            pd.DataFrame(latest_seq, columns=FEATURE_COLS),
-            plot_type="bar",
-            show=False
-        )
-        st.pyplot(bbox_inches="tight")
-    except Exception as e:
-        st.warning(f"⚠️ SHAP not supported for LSTM: {e}")
-        st.info("Falling back to approximate permutation importance...")
+    X_sample = latest_seq.copy()
+    base_pred = scaler_y.inverse_transform(
+        model.predict(latest_scaled, verbose=0).reshape(-1, 1)
+    )[0, 0]
 
-        # --------------------------
-        # 🪄 Simple Permutation Importance (LSTM-safe fallback)
-        # --------------------------
-        X_sample = latest_seq.copy()
-        base_pred = scaler_y.inverse_transform(
-            model.predict(latest_scaled, verbose=0).reshape(-1, 1)
+    importances = {}
+    for i, col in enumerate(FEATURE_COLS):
+        X_perturbed = X_sample.copy()
+        np.random.shuffle(X_perturbed[:, i])
+        pert_scaled = scaler_X.transform(
+            X_perturbed.reshape(-1, len(FEATURE_COLS))
+        ).reshape((1, SEQUENCE_LENGTH, len(FEATURE_COLS)))
+        pred_pert = scaler_y.inverse_transform(
+            model.predict(pert_scaled, verbose=0).reshape(-1, 1)
         )[0, 0]
+        importances[col] = abs(base_pred - pred_pert)
 
-        importances = {}
-        for i, col in enumerate(FEATURE_COLS):
-            X_perturbed = X_sample.copy()
-            np.random.shuffle(X_perturbed[:, i])  # shuffle one feature
-            pert_scaled = scaler_X.transform(X_perturbed.reshape(-1, len(FEATURE_COLS))).reshape((1, SEQUENCE_LENGTH, len(FEATURE_COLS)))
-            pred_pert = scaler_y.inverse_transform(
-                model.predict(pert_scaled, verbose=0).reshape(-1, 1)
-            )[0, 0]
-            importances[col] = abs(base_pred - pred_pert)
-
-        imp_df = pd.DataFrame.from_dict(importances, orient="index", columns=["Importance"]).sort_values(by="Importance", ascending=False)
-
-        plt.figure(figsize=(8, 5), facecolor="#f3e5f5")
-        sns.barplot(x="Importance", y=imp_df.index, data=imp_df, palette="cool")
-        plt.title("Approximate Feature Importance (Permutation-Based)")
-        st.pyplot(plt.gcf())
+    imp_df = pd.DataFrame.from_dict(importances, orient="index", columns=["Importance"]).sort_values(by="Importance", ascending=False)
+    plt.figure(figsize=(8, 5), facecolor="#f3e5f5")
+    sns.barplot(x="Importance", y=imp_df.index, data=imp_df, palette="cool")
+    plt.title("Approximate Feature Importance (Permutation-Based)")
+    st.pyplot(plt.gcf())
 
 except Exception as e:
-    st.warning(f"⚠️ Explainability section failed: {e}")
+    st.warning(f"Explainability section failed: {e}")
 
 # -----------------------------
 # 📋 Summary Stats
