@@ -4,7 +4,7 @@ on:
   workflow_dispatch:  # manual trigger
   schedule:
     # Runs at 12:00 AM and 12:00 PM UTC every day
-    - cron: '0 0,12 * * *'
+    - cron: '0 */6 * * *'
 
 jobs:
   run-pipeline:
