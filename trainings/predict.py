@@ -24,11 +24,20 @@ df.replace([np.inf, -np.inf], np.nan, inplace=True)
 df.ffill(inplace=True)
 df.bfill(inplace=True)
 
+# -----------------------------
+# 🧠 Compute lag and rolling features
+# -----------------------------
+df["lag_1"] = df["aqi_aqicn"].shift(1)
+df["lag_2"] = df["aqi_aqicn"].shift(2)
+df["rolling_mean_3"] = df["aqi_aqicn"].rolling(window=3).mean()
+
 FEATURE_COLS = [
     "ow_temp", "ow_pressure", "ow_humidity", "ow_wind_speed", "ow_wind_deg",
     "ow_clouds", "ow_co", "ow_no2", "ow_pm2_5", "ow_pm10",
-    "hour", "day", "month", "weekday"
+    "hour", "day", "month", "weekday",
+    "lag_1", "lag_2", "rolling_mean_3"
 ]
+
 df.drop(columns=["timestamp_utc"], errors="ignore", inplace=True)
 df.dropna(subset=FEATURE_COLS, inplace=True)
 
