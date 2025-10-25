@@ -155,7 +155,7 @@ logging.info(f"✅ Model and scaler saved in '{model_dir}'")
 # ──────────────────────────────────────────────────────────────
 mr = project.get_model_registry()
 model = mr.python.create_model(
-    name="rf_aqi_model_final",
+    name="rf_aqi_model",
     metrics=metadata,
     description="Optimized Random Forest for AQI prediction (lags + rolling mean)."
 )
