@@ -1,11 +1,11 @@
 """
-🌸 AQI Forecast Dashboard — Light Pastel Theme (Improved)
+🌸 AQI Forecast Dashboard — Scikit-learn Version (Random Forest)
 --------------------------------------------------
+Uses the Random Forest model trained and saved as rf_model.joblib
 Features:
 ✅ Today's Forecast + Next 3-Day Forecast
-✅ SHAP Explainability (LSTM-safe, fallback only)
-✅ Forecast Chart, Heatmap, Summary Stats
-✅ Elegant pastel design (lavender, pink, blue)
+✅ AQI Trends, Heatmap, and Summary Stats
+✅ Pastel UI Design
 """
 
 import os
@@ -13,19 +13,11 @@ import joblib
 import numpy as np
 import pandas as pd
 import hopsworks
-import shap
 import matplotlib.pyplot as plt
 import seaborn as sns
 import streamlit as st
-import tensorflow as tf
 from dotenv import load_dotenv
-from datetime import datetime
-
-# -----------------------------
-# 🩵 Compatibility Fix (for SHAP + NumPy)
-# -----------------------------
-if not hasattr(np, "bool"):
-    np.bool = bool
+from datetime import datetime, timedelta
 
 # -----------------------------
 # 🌸 Streamlit Config & Styling
@@ -67,13 +59,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------
-# 🧩 Load Environment & Model
+# 🧩 Load Environment & Connect to Hopsworks
 # -----------------------------
 load_dotenv()
 HOPSWORKS_API_KEY = os.getenv("aqi_forecast_api_key") or os.getenv("HOPSWORKS_API_KEY")
 
 st.title("🌤️ AQI Forecast Dashboard")
-st.caption("Real-time Air Quality Prediction and Explainability")
+st.caption("Air Quality Prediction and Trends")
 
 try:
     project = hopsworks.login(api_key_value=HOPSWORKS_API_KEY)
@@ -88,6 +80,9 @@ except Exception as e:
     st.error(f"Error connecting to Hopsworks: {e}")
     st.stop()
 
+# -----------------------------
+# 🎯 Define Columns
+# -----------------------------
 TARGET = "aqi_aqicn"
 FEATURE_COLS = [
     "ow_temp", "ow_pressure", "ow_humidity", "ow_wind_speed", "ow_wind_deg",
@@ -102,19 +97,17 @@ if df.empty:
     st.stop()
 
 # -----------------------------
-# 🔮 Load Model & Scalers
+# 🔮 Load Random Forest Model and Scaler
 # -----------------------------
-MODEL_PATH = "models/tf_lstm_model.keras"
-SCALER_X_PATH = "models/tf_scaler.joblib"
-SCALER_Y_PATH = "models/tf_y_scaler.joblib"
+MODEL_PATH = "models/rf_model.joblib"
+SCALER_PATH = "models/rf_scaler.joblib"
 
 try:
-    model = tf.keras.models.load_model(MODEL_PATH)
-    scaler_X = joblib.load(SCALER_X_PATH)
-    scaler_y = joblib.load(SCALER_Y_PATH)
-    st.success("✅ Model and scalers loaded successfully!")
+    model = joblib.load(MODEL_PATH)
+    scaler = joblib.load(SCALER_PATH)
+    st.success("✅ Random Forest model and scaler loaded successfully!")
 except Exception as e:
-    st.error(f"Error loading model/scalers: {e}")
+    st.error(f"Error loading model/scaler: {e}")
     st.stop()
 
 # -----------------------------
@@ -135,50 +128,38 @@ def aqi_category(aqi):
         return "⚫ Hazardous"
 
 # -----------------------------
-# 🔮 Generate Forecast (Today + Next 3 Days)
+# 🔮 Generate Forecast
 # -----------------------------
-SEQUENCE_LENGTH = 7
-latest_seq = df[FEATURE_COLS].iloc[-SEQUENCE_LENGTH:].values
-nsamples, nfeatures = latest_seq.shape
-latest_scaled = scaler_X.transform(latest_seq.reshape(-1, nfeatures)).reshape((1, SEQUENCE_LENGTH, nfeatures))
+X_scaled = scaler.transform(df[FEATURE_COLS])
+preds = model.predict(X_scaled)
 
-FORECAST_DAYS = 4  # today + next 3
-preds, timestamps = [], []
-base_ts = pd.Timestamp.now()
-
-for i in range(FORECAST_DAYS):
-    pred_scaled = model.predict(latest_scaled, verbose=0)
-    pred_aqi = scaler_y.inverse_transform(pred_scaled.reshape(-1, 1))[0, 0]
-    preds.append(pred_aqi)
-    timestamps.append(base_ts + pd.Timedelta(days=i))
-    next_input = np.concatenate([latest_scaled[:, 1:, :], latest_scaled[:, -1:, :]], axis=1)
-    latest_scaled = next_input
-
-forecast_df = pd.DataFrame({"Date": timestamps, "Predicted AQI": preds})
-forecast_df["Category"] = forecast_df["Predicted AQI"].apply(aqi_category)
+df["predicted_aqi"] = preds
+forecast_df = df.tail(4).copy()
+forecast_df["Date"] = [datetime.now() + timedelta(days=i) for i in range(len(forecast_df))]
+forecast_df["Category"] = forecast_df["predicted_aqi"].apply(aqi_category)
 
 # -----------------------------
 # 🌤️ Display Forecast
 # -----------------------------
 st.subheader("🌞 Today's Forecast")
-today_forecast = forecast_df.iloc[0]
+today = forecast_df.iloc[-1]
 st.metric(
-    label=f"Predicted AQI (Today) — {today_forecast['Category']}",
-    value=f"{today_forecast['Predicted AQI']:.2f}"
+    label=f"Predicted AQI (Today) — {today['Category']}",
+    value=f"{today['predicted_aqi']:.2f}"
 )
 
 st.subheader("📅 AQI Forecast for Next 3 Days")
 st.dataframe(
-    forecast_df.iloc[1:].style.format({"Predicted AQI": "{:.2f}"}),
+    forecast_df[["Date", "predicted_aqi", "Category"]].style.format({"predicted_aqi": "{:.2f}"}),
     use_container_width=True
 )
 
 # -----------------------------
-# 📈 AQI History Chart
+# 📈 AQI Trends Chart
 # -----------------------------
 st.markdown("<h3 class='sub-header'>📊 AQI Trends (Past 30 Days)</h3>", unsafe_allow_html=True)
 plt.figure(figsize=(10, 4))
-plt.plot(df[TARGET].tail(30), color="#ab47bc", linewidth=2)
+plt.plot(df[TARGET].tail(30).values, color="#ab47bc", linewidth=2)
 plt.title("Recent AQI Levels", fontsize=12)
 plt.xlabel("Days")
 plt.ylabel("AQI")
@@ -194,39 +175,6 @@ sns.heatmap(corr, cmap="coolwarm", annot=False, ax=ax)
 st.pyplot(fig)
 
 # -----------------------------
-# 🧠 Explainability (Fallback Only)
-# -----------------------------
-st.markdown("<h3 class='sub-header'>🧠 Explainability</h3>", unsafe_allow_html=True)
-st.info("Falling back to approximate permutation importance...")
-
-try:
-    X_sample = latest_seq.copy()
-    base_pred = scaler_y.inverse_transform(
-        model.predict(latest_scaled, verbose=0).reshape(-1, 1)
-    )[0, 0]
-
-    importances = {}
-    for i, col in enumerate(FEATURE_COLS):
-        X_perturbed = X_sample.copy()
-        np.random.shuffle(X_perturbed[:, i])
-        pert_scaled = scaler_X.transform(
-            X_perturbed.reshape(-1, len(FEATURE_COLS))
-        ).reshape((1, SEQUENCE_LENGTH, len(FEATURE_COLS)))
-        pred_pert = scaler_y.inverse_transform(
-            model.predict(pert_scaled, verbose=0).reshape(-1, 1)
-        )[0, 0]
-        importances[col] = abs(base_pred - pred_pert)
-
-    imp_df = pd.DataFrame.from_dict(importances, orient="index", columns=["Importance"]).sort_values(by="Importance", ascending=False)
-    plt.figure(figsize=(8, 5), facecolor="#f3e5f5")
-    sns.barplot(x="Importance", y=imp_df.index, data=imp_df, palette="cool")
-    plt.title("Approximate Feature Importance (Permutation-Based)")
-    st.pyplot(plt.gcf())
-
-except Exception as e:
-    st.warning(f"Explainability section failed: {e}")
-
-# -----------------------------
 # 📋 Summary Stats
 # -----------------------------
 st.markdown("<h3 class='sub-header'>📋 Summary Statistics</h3>", unsafe_allow_html=True)
@@ -237,10 +185,4 @@ st.dataframe(summary, use_container_width=True)
 # 🔁 Refresh Button
 # -----------------------------
 if st.sidebar.button("🔄 Refresh Dashboard"):
-    try:
-        if hasattr(st, "rerun"):
-            st.rerun()
-        else:
-            st.experimental_rerun()
-    except Exception as e:
-        st.warning(f"Could not refresh: {e}")
+    st.experimental_rerun()
