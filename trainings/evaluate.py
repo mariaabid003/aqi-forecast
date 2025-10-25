@@ -1,131 +1,117 @@
 import os
 import pandas as pd
 import numpy as np
-import hopsworks
 import joblib
-import tensorflow as tf
+import hopsworks
 from dotenv import load_dotenv
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from tensorflow.keras.models import load_model
 
 # ============================================================
-# LOAD ENVIRONMENT VARIABLES
-# ============================================================
-load_dotenv()  # ✅ Loads variables from .env file into environment
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
-TARGET_COL = "aqi_aqicn"
-FEATURE_GROUP_NAME = "aqi_features"
-FEATURE_GROUP_VERSION = 1
-MODEL_DIR = "models"
-
-# ============================================================
-# CONNECT TO HOPSWORKS (Non-interactive)
+# 🔐 CONNECT TO HOPSWORKS
 # ============================================================
 print("🔐 Connecting to Hopsworks...")
-
-HOPSWORKS_API_KEY = os.getenv("HOPSWORKS_API_KEY") or os.getenv("aqi_forecast_api_key")
+load_dotenv()
+HOPSWORKS_API_KEY = os.getenv("aqi_forecast_api_key") or os.getenv("HOPSWORKS_API_KEY")
 if not HOPSWORKS_API_KEY:
-    raise ValueError("❌ Missing Hopsworks API key! Please set it in your .env file or as an environment variable.")
+    raise ValueError("❌ Missing Hopsworks API key!")
 
 project = hopsworks.login(api_key_value=HOPSWORKS_API_KEY)
 fs = project.get_feature_store()
 
 # ============================================================
-# LOAD DATA FROM FEATURE GROUP
+# 📡 LOAD DATA
 # ============================================================
-try:
-    feature_group = fs.get_feature_group(name=FEATURE_GROUP_NAME, version=FEATURE_GROUP_VERSION)
-except Exception as e:
-    raise ValueError(f"🚨 Feature group '{FEATURE_GROUP_NAME}' not found: {e}")
+print("📡 Loading feature group...")
+fg = fs.get_feature_group(name="aqi_features", version=1)
+df = fg.read()
+print(f"✅ Data loaded from Hopsworks. Shape: {df.shape}")
 
-df = feature_group.read()
-
-# Clean data
+# ============================================================
+# 🧹 CLEAN DATA
+# ============================================================
 df.replace([np.inf, -np.inf], np.nan, inplace=True)
 df.ffill(inplace=True)
 df.bfill(inplace=True)
-df = df.dropna(subset=[TARGET_COL])
 
-if TARGET_COL not in df.columns:
-    raise ValueError(f"🚨 Target column '{TARGET_COL}' not found in dataset.")
+TARGET = "aqi_aqicn"
+feature_cols = [
+    "ow_temp", "ow_pressure", "ow_humidity", "ow_wind_speed", "ow_wind_deg",
+    "ow_clouds", "ow_co", "ow_no2", "ow_pm2_5", "ow_pm10",
+    "hour", "day", "month", "weekday"
+]
 
-# Split into features and target
-X = df.drop(columns=[TARGET_COL])
-y = df[TARGET_COL]
-
-# Keep only numeric columns
-X = X.select_dtypes(include=[np.number])
-
-print("✅ Data loaded for evaluation!")
-print(f"Features shape: {X.shape}, Target shape: {y.shape}")
+df = df.drop(columns=["timestamp_utc"], errors="ignore")
+df = df.dropna(subset=[TARGET] + feature_cols)
+if df.empty:
+    raise ValueError("🚨 Dataset empty after cleaning!")
 
 # ============================================================
-# DEFINE EVALUATION FUNCTION
+# ⚙️ Evaluate Random Forest Model
 # ============================================================
-def evaluate_model(model_type, model_file, scaler_file):
-    """Evaluate a given model and return metrics."""
-    if not os.path.exists(model_file):
-        print(f"🚨 {model_type} model not found at {model_file}")
-        return None
+print("\n🔍 Evaluating rf_aqi_model...")
+try:
+    rf_model_path = os.path.join("rf_aqi_model", "pipeline.pkl")
+    rf_model = joblib.load(rf_model_path)
 
-    if not os.path.exists(scaler_file):
-        print(f"🚨 {model_type} scaler not found at {scaler_file}")
-        return None
+    X = df[feature_cols]
+    y = df[TARGET]
+    y_pred = rf_model.predict(X)
 
-    print(f"\n🔍 Evaluating {model_type} model...")
+    rf_rmse = np.sqrt(mean_squared_error(y, y_pred))
+    rf_mae = mean_absolute_error(y, y_pred)
+    rf_r2 = r2_score(y, y_pred)
 
-    # Load scaler and transform input data
-    scaler = joblib.load(scaler_file)
-    X_scaled = scaler.transform(X)
+    print(f"✅ rf_aqi_model - RMSE: {rf_rmse:.2f}, MAE: {rf_mae:.2f}, R²: {rf_r2:.2f}")
 
-    # Load and predict using the model
-    if model_type == "sklearn":
-        model = joblib.load(model_file)
-        y_pred = model.predict(X_scaled)
-    elif model_type == "tensorflow":
-        model = tf.keras.models.load_model(model_file)
-        y_pred = model.predict(X_scaled).flatten()
-    else:
-        raise ValueError("Invalid model_type. Must be 'sklearn' or 'tensorflow'.")
-
-    # Compute metrics
-    rmse = np.sqrt(mean_squared_error(y, y_pred))
-    mae = mean_absolute_error(y, y_pred)
-    r2 = r2_score(y, y_pred)
-
-    print(f"✅ {model_type} - RMSE: {rmse:.2f}, MAE: {mae:.2f}, R²: {r2:.2f}")
-
-    return {"Model": model_type, "RMSE": rmse, "MAE": mae, "R²": r2}
+except Exception as e:
+    print(f"❌ Could not load or evaluate rf_aqi_model: {e}")
 
 # ============================================================
-# EVALUATE BOTH MODELS
+# ⚙️ Evaluate TensorFlow LSTM Model
 # ============================================================
-results = []
+print("\n🔍 Evaluating tf_lstm_aqi_model...")
+try:
+    SEQ_LEN = 7
 
-# Sklearn (Random Forest)
-sklearn_model = os.path.join(MODEL_DIR, "rf_model.joblib")
-sklearn_scaler = os.path.join(MODEL_DIR, "rf_scaler.joblib")
-sklearn_metrics = evaluate_model("sklearn", sklearn_model, sklearn_scaler)
-if sklearn_metrics:
-    results.append(sklearn_metrics)
+    # Recreate sequences
+    X_seq, y_seq = [], []
+    for i in range(SEQ_LEN, len(df)):
+        X_seq.append(df[feature_cols].iloc[i - SEQ_LEN:i].values)
+        y_seq.append(df[TARGET].iloc[i])
+    X_seq = np.array(X_seq)
+    y_seq = np.array(y_seq)
 
-# TensorFlow Model
-tf_model = os.path.join(MODEL_DIR, "tf_model.keras")
-tf_scaler = os.path.join(MODEL_DIR, "tf_scaler.joblib")
-tf_metrics = evaluate_model("tensorflow", tf_model, tf_scaler)
-if tf_metrics:
-    results.append(tf_metrics)
+    # 80/20 split
+    split_idx = int(len(X_seq) * 0.8)
+    X_test = X_seq[split_idx:]
+    y_test = y_seq[split_idx:]
+
+    # Load saved scalers
+    scaler_X = joblib.load("models/tf_scaler.joblib")
+    scaler_y = joblib.load("models/tf_y_scaler.joblib")
+
+    # Scale inputs (same way as training)
+    ns, nt, nf = X_test.shape
+    X_scaled = scaler_X.transform(X_test.reshape(ns * nt, nf)).reshape(ns, nt, nf)
+
+    # Load model
+    model = load_model("models/tf_lstm_model.keras")
+
+    # Predict and inverse transform
+    y_pred_scaled = model.predict(X_scaled, verbose=0)
+    y_pred = scaler_y.inverse_transform(y_pred_scaled)
+
+    lstm_rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+    lstm_mae = mean_absolute_error(y_test, y_pred)
+    lstm_r2 = r2_score(y_test, y_pred)
+
+    print(f"✅ tf_lstm_aqi_model - RMSE: {lstm_rmse:.2f}, MAE: {lstm_mae:.2f}, R²: {lstm_r2:.2f}")
+
+except Exception as e:
+    print(f"❌ Could not evaluate tf_lstm_aqi_model: {e}")
 
 # ============================================================
-# DISPLAY RESULTS
+# 🏁 DONE
 # ============================================================
-if results:
-    results_df = pd.DataFrame(results)
-    print("\n📊 Model Evaluation Comparison:")
-    print(results_df.to_string(index=False))
-else:
-    print("🚨 No models were successfully evaluated!")
-
 print("\n🏁 Evaluation completed successfully!")

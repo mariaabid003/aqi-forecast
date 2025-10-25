@@ -8,31 +8,55 @@ from dotenv import load_dotenv
 from sklearn.preprocessing import StandardScaler
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout, BatchNormalization
-from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+import shutil
+import logging
 
-# -----------------------------
-# 🔐 Connect to Hopsworks
-# -----------------------------
-print("🔐 Connecting to Hopsworks...")
+# ============================================================
+# 🪶 SETUP LOGGING
+# ============================================================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+log = logging.getLogger(__name__)
+
+# ============================================================
+# 🔐 CONNECT TO HOPSWORKS
+# ============================================================
+log.info("🔐 Connecting to Hopsworks...")
 load_dotenv()
-HOPSWORKS_API_KEY = os.getenv("aqi_forecast_api_key")
+HOPSWORKS_API_KEY = os.getenv("aqi_forecast_api_key") or os.getenv("HOPSWORKS_API_KEY")
 if not HOPSWORKS_API_KEY:
     raise ValueError("❌ Missing Hopsworks API key!")
 
 project = hopsworks.login(api_key_value=HOPSWORKS_API_KEY)
 fs = project.get_feature_store()
+mr = project.get_model_registry()
 
-# -----------------------------
-# 📥 Load data from Feature Store
-# -----------------------------
-fg = fs.get_feature_group(name="aqi_features", version=1)
-df = fg.read()
-print("✅ Data loaded! Dataset shape:", df.shape)
+# ============================================================
+# 📥 LOAD DATA FROM FEATURE STORE (with retry + fallback)
+# ============================================================
+def load_feature_data():
+    fg = fs.get_feature_group(name="aqi_features", version=1)
+    for attempt in range(3):
+        try:
+            df = fg.read()
+            log.info("✅ Data loaded via Arrow Flight.")
+            return df
+        except Exception as e:
+            log.warning(f"⚠️ Attempt {attempt + 1} failed: {e}")
+            time.sleep(3)
+    log.info("🔁 Using fallback (pandas engine)...")
+    return fg.read(read_options={"engine": "pandas"})
 
-# -----------------------------
-# 🧹 Data Cleaning
-# -----------------------------
+df = load_feature_data()
+log.info(f"✅ Data shape: {df.shape}")
+
+# ============================================================
+# 🧹 CLEAN DATA
+# ============================================================
 df.replace([np.inf, -np.inf], np.nan, inplace=True)
 df.ffill(inplace=True)
 df.bfill(inplace=True)
@@ -47,49 +71,45 @@ feature_cols = [
 df = df.drop(columns=["timestamp_utc"], errors="ignore")
 df = df.dropna(subset=[TARGET] + feature_cols)
 if df.empty:
-    raise ValueError("🚨 Dataset is empty after cleaning!")
+    raise ValueError("🚨 Dataset empty after cleaning!")
 
-# -----------------------------
-# 🔁 Create sequences for LSTM
-# -----------------------------
-SEQUENCE_LENGTH = 7  # past 7 days to predict next day
+# ============================================================
+# 🔁 CREATE SEQUENCES FOR LSTM
+# ============================================================
+SEQUENCE_LENGTH = 7
 X_seq, y_seq = [], []
 for i in range(SEQUENCE_LENGTH, len(df)):
-    X_seq.append(df[feature_cols].iloc[i-SEQUENCE_LENGTH:i].values)
+    X_seq.append(df[feature_cols].iloc[i - SEQUENCE_LENGTH:i].values)
     y_seq.append(df[TARGET].iloc[i])
 
 X_seq = np.array(X_seq)
 y_seq = np.array(y_seq)
-print("✅ Sequence shape:", X_seq.shape, y_seq.shape)
+log.info(f"✅ Sequence shapes: X={X_seq.shape}, y={y_seq.shape}")
 
-# -----------------------------
-# ⚖️ Feature Scaling
-# -----------------------------
+# ============================================================
+# ⚖️ SCALING
+# ============================================================
+os.makedirs("models", exist_ok=True)
 scaler_X = StandardScaler()
 nsamples, ntimesteps, nfeatures = X_seq.shape
-X_reshaped = X_seq.reshape((nsamples * ntimesteps, nfeatures))
-X_scaled_flat = scaler_X.fit_transform(X_reshaped)
-X_scaled = X_scaled_flat.reshape((nsamples, ntimesteps, nfeatures))
+X_scaled_flat = scaler_X.fit_transform(X_seq.reshape(nsamples * ntimesteps, nfeatures))
+X_scaled = X_scaled_flat.reshape(nsamples, ntimesteps, nfeatures)
 joblib.dump(scaler_X, "models/tf_scaler.joblib")
-print("✅ Feature scaler saved to models/tf_scaler.joblib")
 
-# -----------------------------
-# ⚖️ Target Scaling
-# -----------------------------
 scaler_y = StandardScaler()
 y_scaled = scaler_y.fit_transform(y_seq.reshape(-1, 1))
 joblib.dump(scaler_y, "models/tf_y_scaler.joblib")
-print("✅ Target scaler saved to models/tf_y_scaler.joblib")
+log.info("✅ Scalers saved!")
 
-# -----------------------------
-# 🧱 Build LSTM Model
-# -----------------------------
+# ============================================================
+# 🧱 BUILD LSTM MODEL
+# ============================================================
 model = Sequential([
-    LSTM(64, activation="tanh", input_shape=(SEQUENCE_LENGTH, len(feature_cols)), return_sequences=True),
+    LSTM(128, activation="tanh", input_shape=(SEQUENCE_LENGTH, len(feature_cols)), return_sequences=True),
+    Dropout(0.3),
+    LSTM(64, activation="tanh"),
     Dropout(0.2),
-    LSTM(32, activation="tanh"),
-    Dropout(0.1),
-    Dense(16, activation="relu"),
+    Dense(32, activation="relu"),
     Dense(1)
 ])
 
@@ -99,37 +119,54 @@ model.compile(
     metrics=["mae"]
 )
 
-# -----------------------------
-# 🚀 Train Model
-# -----------------------------
-early_stop = EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)
+# ============================================================
+# 🚀 TRAIN MODEL
+# ============================================================
+early_stop = EarlyStopping(monitor="val_loss", patience=15, restore_best_weights=True)
+reduce_lr = ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=5, verbose=1)
+
 history = model.fit(
     X_scaled, y_scaled,
     validation_split=0.2,
-    epochs=100,
+    epochs=150,
     batch_size=8,
-    callbacks=[early_stop],
+    callbacks=[early_stop, reduce_lr],
     shuffle=True,
     verbose=1
 )
 
-# -----------------------------
-# 💾 Save Full Model
-# -----------------------------
+train_loss = float(history.history["loss"][-1])
+val_loss = float(history.history["val_loss"][-1])
+val_mae = float(history.history["mae"][-1])
+
+log.info(f"✅ Training done: train_loss={train_loss:.4f}, val_loss={val_loss:.4f}, val_mae={val_mae:.4f}")
+
+# ============================================================
+# 💾 SAVE MODEL LOCALLY
+# ============================================================
 MODEL_PATH = "models/tf_lstm_model.keras"
 model.save(MODEL_PATH)
-print(f"✅ LSTM model saved to {MODEL_PATH}")
+log.info(f"✅ TensorFlow LSTM model saved → {MODEL_PATH}")
 
-# -----------------------------
-# ☁️ Upload Model to Hopsworks Model Registry
-# -----------------------------
-mr = project.get_model_registry()
+# ============================================================
+# ☁️ UPLOAD MODEL TO HOPSWORKS MODEL REGISTRY
+# ============================================================
 timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+model_dir = os.path.join("models", "tf_lstm_artifact")
+os.makedirs(model_dir, exist_ok=True)
+
+# Copy artifacts
+for file in ["tf_lstm_model.keras", "tf_scaler.joblib", "tf_y_scaler.joblib"]:
+    shutil.copy(f"models/{file}", os.path.join(model_dir, file))
+
 model_meta = mr.python.create_model(
-    name="tf_lstm_aqi_model",
-    metrics={"val_loss": float(history.history['val_loss'][-1])},
-    description=f"LSTM AQI forecasting model trained on {timestamp}"
+    name="tf_lstm_aqi_model_final",
+    metrics={"train_loss": train_loss, "val_loss": val_loss, "val_mae": val_mae},
+    description=f"Final LSTM AQI forecasting model trained on {timestamp}"
 )
-model_meta.save(MODEL_PATH)
-print("🚀 Model uploaded to Hopsworks Model Registry!")
-print("🏁 TensorFlow LSTM training completed successfully!")
+model_meta.save(model_dir)
+
+log.info("🚀 Uploaded tf_lstm_aqi_model_final to Hopsworks Model Registry.")
+log.info(f"📂 Included files: {os.listdir(model_dir)}")
+log.info(f"📈 Metrics: train_loss={train_loss:.4f}, val_loss={val_loss:.4f}, val_mae={val_mae:.4f}")
+log.info("🏁 TensorFlow LSTM training & upload completed successfully!")

@@ -82,16 +82,7 @@ jobs:
         run: python trainings/train_tf.py
 
       # -------------------------
-      # 8. Evaluate Models
-      # -------------------------
-      - name: Evaluate Models
-        env:
-          aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
-          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
-        run: python trainings/evaluate.py
-
-      # -------------------------
-      # 9. Generate 3-Day Forecast (and store CSV)
+      # 8. Generate 3-Day Forecast (and store CSV)
       # -------------------------
       - name: Generate 3-Day Forecast
         env:
@@ -106,7 +97,7 @@ jobs:
           cat data/forecast_next_3_days.csv || echo "⚠️ No forecast CSV found!"
 
       # -------------------------
-      # 10. Upload Artifacts
+      # 9. Upload Artifacts
       # -------------------------
       - name: Upload Artifacts (models, logs, forecast)
         uses: actions/upload-artifact@v4
