@@ -1,0 +1,21 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Environment files
+.env
+
+# Model & data artifacts
+*.pkl
+*.joblib
+*.csv
+models/
+artifacts/
+data/
+
+# Virtual environment
+venv/
+.env/
+.venv/
+
+
