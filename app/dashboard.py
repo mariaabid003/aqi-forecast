@@ -92,7 +92,9 @@ except Exception as e:
     st.error(f"Feature group error: {e}")
     st.stop()
 
+# -----------------------------
 # Data cleaning
+# -----------------------------
 df.replace([np.inf, -np.inf], np.nan, inplace=True)
 df.ffill(inplace=True)
 df.bfill(inplace=True)
@@ -101,24 +103,27 @@ TARGET = "aqi_aqicn"
 FEATURE_COLS = [
     "ow_temp", "ow_pressure", "ow_humidity", "ow_wind_speed", "ow_wind_deg",
     "ow_clouds", "ow_co", "ow_no2", "ow_pm2_5", "ow_pm10",
-    "hour", "day", "month", "weekday"
+    "hour", "day", "month", "weekday",
+    "lag_1", "lag_2", "rolling_mean_3"
 ]
 
+# Compute lag and rolling features
+df["lag_1"] = df[TARGET].shift(1)
+df["lag_2"] = df[TARGET].shift(2)
+df["rolling_mean_3"] = df[TARGET].rolling(window=3).mean()
 df.drop(columns=["timestamp_utc"], errors="ignore", inplace=True)
 df.dropna(subset=[TARGET] + FEATURE_COLS, inplace=True)
 
 # -----------------------------
-# 🤖 Load RF Model and Scaler (recursive + latest version)
+# 🤖 Load RF Model and Scaler (latest version)
 # -----------------------------
 mr = project.get_model_registry()
 
 try:
-    # Get all versions and select latest dynamically
     all_models = mr.get_models("rf_aqi_model")
     latest_model = max(all_models, key=lambda m: m.version)
     model_dir = latest_model.download()
 
-    # Recursively locate .pkl files
     model_path, scaler_path = None, None
     for root, _, files in os.walk(model_dir):
         for f in files:
@@ -132,7 +137,6 @@ try:
 
     model = joblib.load(model_path)
     scaler = joblib.load(scaler_path)
-
     st.success(f"✅ Random Forest model (version {latest_model.version}) loaded successfully")
 except Exception as e:
     st.error(f"❌ Model loading failed: {e}")
@@ -166,6 +170,7 @@ for i in range(1, 4):
     current_features["month"] = future_date.month
     current_features["weekday"] = future_date.weekday()
 
+    # Predict AQI
     pred = model.predict(scaler.transform([current_features]))[0]
     future_preds.append({
         "Date": future_date.strftime("%Y-%m-%d"),
@@ -173,9 +178,10 @@ for i in range(1, 4):
         "Category": aqi_category(pred)
     })
 
-    # Update PM values heuristically for next recursive step
-    current_features["ow_pm2_5"] = pred * 0.4
-    current_features["ow_pm10"] = pred * 0.6
+    # Update lag and rolling features for next recursive step
+    current_features["lag_2"] = current_features["lag_1"]
+    current_features["lag_1"] = pred
+    current_features["rolling_mean_3"] = np.mean([current_features["lag_1"], current_features["lag_2"], pred])
 
 forecast_df = pd.DataFrame(future_preds)
 
