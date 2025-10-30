@@ -1,63 +1,57 @@
-# features/backfill.py
 import os
 import pandas as pd
 import numpy as np
 from datetime import datetime, timezone
 import requests
 from dotenv import load_dotenv
-import hopsworks  # Use hopsworks==4.4.2
+import hopsworks
 
-# --- Load environment variables ---
-load_dotenv()
+# Load environment variables
+env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+load_dotenv(env_path)
 
-OW_KEY = os.getenv("OPENWEATHER_API_KEY")
+OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 AQICN_TOKEN = os.getenv("AQICN_TOKEN")
-HOPSWORKS_API_KEY = os.getenv("aqi_forecast_api_key")
+HOPSWORKS_API_KEY = os.getenv("aqi_forecast_api_key") or os.getenv("HOPSWORKS_API_KEY")
 
-CITY = "Karachi"
 LAT, LON = 24.8607, 67.0011
 
-
-# --- Fetch current data ---
+# Fetch current weather
 def fetch_current_weather():
     try:
-        url = f"https://api.openweathermap.org/data/2.5/weather?lat={LAT}&lon={LON}&appid={OW_KEY}&units=metric"
+        url = f"https://api.openweathermap.org/data/2.5/weather?lat={LAT}&lon={LON}&appid={OPENWEATHER_API_KEY}&units=metric"
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         return resp.json()
-    except Exception as e:
-        print("⚠️ Weather fetch error:", e)
+    except:
         return {}
 
-
+# Fetch current AQI
 def fetch_current_aqi():
     try:
         url = f"https://api.waqi.info/feed/geo:{LAT};{LON}/?token={AQICN_TOKEN}"
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         return resp.json().get("data", {})
-    except Exception as e:
-        print("⚠️ AQI fetch error:", e)
+    except:
         return {}
 
-
-# --- Combine into DataFrame ---
 def fetch_real_data():
-    print("🌍 Fetching real-time AQI + weather data...")
     weather = fetch_current_weather()
     aqi = fetch_current_aqi()
-
     if not weather or not aqi:
-        print("⚠️ Missing data, skipping update.")
         return pd.DataFrame()
 
+    # ✅ ensure timestamp is a proper UTC datetime
     now = datetime.now(timezone.utc)
+
     main = weather.get("main", {})
     wind = weather.get("wind", {})
     clouds = weather.get("clouds", {})
     iaqi = aqi.get("iaqi", {})
 
     row = {
+        # ✅ store directly as datetime (not microseconds)
         "timestamp_utc": now,
         "ow_temp": main.get("temp"),
         "ow_pressure": main.get("pressure"),
@@ -77,96 +71,78 @@ def fetch_real_data():
     }
 
     df = pd.DataFrame([row])
-    for col in df.columns:
-        if col != "timestamp_utc":
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+    # ✅ ensure consistent UTC type
+    df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"], utc=True)
 
-    print("✅ Real-time data fetched!")
     return df
 
+def preprocess_features(df):
+    df = df.sort_values("timestamp_utc").reset_index(drop=True)
+    df.replace([np.inf, -np.inf], np.nan, inplace=True)
+    df.ffill(inplace=True)
 
-# --- Full backfill and historic update ---
+    df["lag_1"] = df["aqi_aqicn"].shift(1).fillna(method="ffill").fillna(0)
+    df["lag_2"] = df["aqi_aqicn"].shift(2).fillna(method="ffill").fillna(0)
+    df["rolling_mean_3"] = df["aqi_aqicn"].rolling(window=3, min_periods=1).mean()
+
+    # Correct data types for Hopsworks schema
+    float_cols = [
+        "ow_temp", "ow_pressure", "ow_humidity",
+        "ow_wind_speed", "ow_wind_deg", "ow_clouds",
+        "ow_co", "ow_no2", "ow_pm2_5", "ow_pm10",
+        "aqi_aqicn", "lag_1", "lag_2", "rolling_mean_3"
+    ]
+    time_int_cols = ["hour", "day", "month", "weekday"]
+
+    df[float_cols] = df[float_cols].astype("float64")
+    df[time_int_cols] = df[time_int_cols].astype("int64")
+
+    # ✅ make sure timestamps remain timezone-aware
+    df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"], utc=True)
+
+    return df
+
 def backfill():
     if not HOPSWORKS_API_KEY:
-        print("❌ Missing HOPSWORKS_API_KEY. Cannot upload.")
+        print("Missing Hopsworks API key.")
         return
 
-    print("🔐 Logging into Hopsworks...")
     project = hopsworks.login(api_key_value=HOPSWORKS_API_KEY)
     fs = project.get_feature_store()
 
-    # --- Load existing feature group if it exists ---
     try:
-        fg = fs.get_feature_group(name="aqi_features", version=1)
+        fg = fs.get_feature_group("aqi_features", 1)
         df_existing = fg.read()
-        print(f"ℹ️ Loaded {len(df_existing)} existing rows from Hopsworks.")
-    except:
+        print(f"Loaded {len(df_existing)} rows.")
+    except Exception:
         df_existing = pd.DataFrame()
-        fg = fs.get_or_create_feature_group(
+        fg = fs.create_feature_group(
             name="aqi_features",
             version=1,
-            description="AQI + weather dataset for Karachi",
+            description="AQI plus weather data for Karachi",
             primary_key=["timestamp_utc"],
             event_time="timestamp_utc",
         )
-        print("ℹ️ Feature group created as it did not exist.")
+        print("Created new feature group aqi_features v1.")
 
-    # --- Fetch new data ---
     df_new = fetch_real_data()
-
-    # --- Combine old + new ---
-    if not df_existing.empty:
-        df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-    else:
-        df_combined = df_new
-
-    if df_combined.empty:
-        print("⚠️ No data to upload.")
+    if df_new.empty:
+        print("Nothing to update.")
         return
 
-    # --- Convert timestamp and sort ---
-    df_combined["timestamp_utc"] = pd.to_datetime(df_combined["timestamp_utc"], utc=True, errors="coerce")
-    df_combined = df_combined.sort_values("timestamp_utc").reset_index(drop=True)
+    df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+    df_clean = preprocess_features(df_combined)
+    df_clean.drop_duplicates(subset=["timestamp_utc"], keep="last", inplace=True)
 
-    # --- Forward-fill missing numeric values ---
-    numeric_cols = [
-        "ow_temp", "ow_pressure", "ow_humidity", "ow_wind_speed",
-        "ow_wind_deg", "ow_clouds", "ow_co", "ow_no2",
-        "ow_pm2_5", "ow_pm10", "aqi_aqicn", "hour",
-        "day", "month", "weekday"
-    ]
-    df_combined[numeric_cols] = df_combined[numeric_cols].ffill().fillna(0)
+    print(f"Uploading {len(df_clean)} rows to Hopsworks.")
+    fg.insert(df_clean, write_options={"wait_for_job": True})
+    print("Backfill complete.")
 
-    # --- Ensure types ---
-    int_cols = ["ow_pressure", "ow_humidity", "ow_wind_deg", "ow_clouds",
-                "ow_pm2_5", "ow_pm10", "aqi_aqicn",
-                "hour", "day", "month", "weekday"]
-    float_cols = ["ow_temp", "ow_wind_speed", "ow_no2", "ow_co"]
-
-    for col in int_cols:
-        df_combined[col] = df_combined[col].astype("int64")
-    for col in float_cols:
-        df_combined[col] = df_combined[col].astype(float)
-
-    # --- Deduplicate based on timestamp ---
-    df_combined = df_combined.drop_duplicates(subset=["timestamp_utc"], keep="last").reset_index(drop=True)
-
-    print("🧹 Cleaned & combined DataFrame info:")
-    print(df_combined.info())
-
-    # --- Upload entire cleaned dataset ---
-    print(f"📤 Uploading {len(df_combined)} rows to Hopsworks...")
-    fg.insert(df_combined, write_options={"wait_for_job": True})
-    print("🚀 Backfill completed successfully! All historical & new data updated.")
-
-
-# --- Entry Point ---
 if __name__ == "__main__":
-    print(f"🕐 Running backfill at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ...")
-    if not OW_KEY:
-        print("❌ Missing OpenWeather key!")
+    if not OPENWEATHER_API_KEY:
+        print("Missing OpenWeather key.")
     elif not AQICN_TOKEN:
-        print("❌ Missing AQICN token!")
+        print("Missing AQICN token.")
     else:
-        print(f"Using API keys: {OW_KEY[:6]}..., {AQICN_TOKEN[:6]}...")
+        print("Running real time backfill.")
         backfill()

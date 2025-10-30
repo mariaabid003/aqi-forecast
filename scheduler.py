@@ -20,12 +20,11 @@ def run_backfill():
     except Exception as e:
         print(f"⚠️ Unexpected error during backfill: {e}")
 
-# Run every 15 minutes
-schedule.every(15).minutes.do(run_backfill)
+# ✅ Run every 20 minutes → 3 times per hour
+schedule.every(10).minutes.do(run_backfill)
 
-print("🚀 Scheduler started. Running every 15 minutes...")
+print("🚀 Scheduler started. Running every 20 minutes...")
 
 while True:
     schedule.run_pending()
     time.sleep(60)
-
