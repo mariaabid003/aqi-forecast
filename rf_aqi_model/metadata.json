@@ -1,9 +1,10 @@
 {
     "model_name": "rf_aqi_model",
     "version": null,
-    "r2": 0.9321561192157226,
-    "rmse": 6.872044432524362,
-    "mae": 2.9110705266955255,
+    "train_r2": 0.9632998638623902,
+    "test_r2": 0.9536558374156929,
+    "rmse": 11.436388140149981,
+    "mae": 7.565075236195413,
     "features": [
         "ow_temp",
         "ow_pressure",
@@ -21,9 +22,7 @@
         "weekday",
         "lag_1",
         "lag_2",
-        "lag_3",
-        "rolling_mean_3",
-        "rolling_mean_6"
+        "rolling_mean_3"
     ],
     "target": "aqi_aqicn"
 }

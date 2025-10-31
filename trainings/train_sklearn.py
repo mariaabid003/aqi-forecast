@@ -26,38 +26,32 @@ FEATURE_GROUP_NAME = "aqi_features"
 FEATURE_GROUP_VERSION = 1
 MODEL_NAME = "rf_aqi_model"
 MODEL_DIR = "rf_aqi_model"
-
 os.makedirs(MODEL_DIR, exist_ok=True)
-
 
 # -----------------------------
 # ⚙️ Utility functions
 # -----------------------------
 def preprocess_features(df):
-    """Add lags, rolling stats, and clean data."""
     df = df.sort_values("timestamp_utc").reset_index(drop=True)
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df.ffill(inplace=True)
 
-    # ✅ Temporal features
-    df["lag_1"] = df["aqi_aqicn"].shift(1).bfill()
-    df["lag_2"] = df["aqi_aqicn"].shift(2).bfill()
-    df["lag_3"] = df["aqi_aqicn"].shift(3).bfill()
-    df["rolling_mean_3"] = df["aqi_aqicn"].rolling(window=3, min_periods=1).mean()
-    df["rolling_mean_6"] = df["aqi_aqicn"].rolling(window=6, min_periods=1).mean()
+    # Lags and rolling mean (match backfill.py)
+    if "lag_1" not in df.columns:
+        df["lag_1"] = df["aqi_aqicn"].shift(1).bfill().fillna(0)
+    if "lag_2" not in df.columns:
+        df["lag_2"] = df["aqi_aqicn"].shift(2).bfill().fillna(0)
+    if "rolling_mean_3" not in df.columns:
+        df["rolling_mean_3"] = df["aqi_aqicn"].rolling(window=3, min_periods=1).mean()
 
     df.dropna(inplace=True)
-
     return df
 
-
 def train_test_split_time(df, test_size=0.2):
-    """Split data chronologically (past → future)."""
     split_idx = int(len(df) * (1 - test_size))
     train_df = df.iloc[:split_idx]
     test_df = df.iloc[split_idx:]
     return train_df, test_df
-
 
 # -----------------------------
 # 🚀 Connect to Hopsworks
@@ -82,12 +76,11 @@ feature_cols = [
     "ow_temp", "ow_pressure", "ow_humidity", "ow_wind_speed",
     "ow_wind_deg", "ow_clouds", "ow_co", "ow_no2",
     "ow_pm2_5", "ow_pm10", "hour", "day", "month", "weekday",
-    "lag_1", "lag_2", "lag_3", "rolling_mean_3", "rolling_mean_6"
+    "lag_1", "lag_2", "rolling_mean_3"
 ]
 
 target_col = "aqi_aqicn"
-df = df.dropna(subset=[target_col])
-df = df.reset_index(drop=True)
+df = df.dropna(subset=[target_col]).reset_index(drop=True)
 
 X = df[feature_cols]
 y = df[target_col]
@@ -100,7 +93,6 @@ print(f"✅ Data ready: {len(X)} samples, {len(feature_cols)} features.")
 train_df, test_df = train_test_split_time(df, test_size=0.2)
 X_train, y_train = train_df[feature_cols], train_df[target_col]
 X_test, y_test = test_df[feature_cols], test_df[target_col]
-
 print(f"📊 Train size: {len(X_train)}, Test size: {len(X_test)}")
 
 # -----------------------------
@@ -137,18 +129,21 @@ for train_idx, val_idx in tscv.split(X_train_scaled):
 print(f"📊 CV RMSE (5-fold): {np.round(cv_rmse, 3)} | Mean: {np.mean(cv_rmse):.3f}")
 
 # -----------------------------
-# 🧠 Evaluate on Test Set
+# 🧠 Evaluate on Train & Test
 # -----------------------------
 rf.fit(X_train_scaled, y_train)
-y_pred = rf.predict(X_test_scaled)
+y_train_pred = rf.predict(X_train_scaled)
+y_test_pred = rf.predict(X_test_scaled)
 
-rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-mae = mean_absolute_error(y_test, y_pred)
-r2 = r2_score(y_test, y_pred)
+train_r2 = r2_score(y_train, y_train_pred)
+test_r2 = r2_score(y_test, y_test_pred)
+test_rmse = np.sqrt(mean_squared_error(y_test, y_test_pred))
+test_mae = mean_absolute_error(y_test, y_test_pred)
 
-print(f"✅ Test R²: {r2:.3f}")
-print(f"✅ Test RMSE: {rmse:.3f}")
-print(f"✅ Test MAE: {mae:.3f}")
+print(f"✅ Train R²: {train_r2:.3f}")
+print(f"✅ Test  R²: {test_r2:.3f}")
+print(f"✅ Test RMSE: {test_rmse:.3f}")
+print(f"✅ Test MAE: {test_mae:.3f}")
 
 # -----------------------------
 # 🔁 Retrain on Full Data
@@ -165,9 +160,10 @@ joblib.dump(scaler, os.path.join(MODEL_DIR, "scaler.pkl"))
 metadata = {
     "model_name": MODEL_NAME,
     "version": None,
-    "r2": float(r2),
-    "rmse": float(rmse),
-    "mae": float(mae),
+    "train_r2": float(train_r2),
+    "test_r2": float(test_r2),
+    "rmse": float(test_rmse),
+    "mae": float(test_mae),
     "features": feature_cols,
     "target": target_col
 }
@@ -183,7 +179,7 @@ print("💾 Model, scaler, and metadata saved locally.")
 mr = project.get_model_registry()
 model = mr.python.create_model(
     name=MODEL_NAME,
-    metrics={"r2": r2, "rmse": rmse, "mae": mae},
+    metrics={"train_r2": train_r2, "test_r2": test_r2, "rmse": test_rmse, "mae": test_mae},
     description="Random Forest model for AQI forecasting with temporal features"
 )
 

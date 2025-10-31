@@ -25,17 +25,16 @@ if not API_KEY:
     raise ValueError("Missing HOPSWORKS API key in env (aqi_forecast_api_key / HOPSWORKS_API_KEY)")
 
 # -------------------------
-# Feature columns (must exactly match training)
+# Feature columns (match train_sklearn & backfill)
 # -------------------------
 FEATURE_COLS = [
     "ow_temp", "ow_pressure", "ow_humidity", "ow_wind_speed", "ow_wind_deg",
     "ow_clouds", "ow_co", "ow_no2", "ow_pm2_5", "ow_pm10",
     "hour", "day", "month", "weekday",
-    "lag_1", "lag_2", "lag_3", "rolling_mean_3", "rolling_mean_6"
+    "lag_1", "lag_2", "rolling_mean_3"
 ]
 
 def find_artifact_files(model_dir, names=("model.pkl", "scaler.pkl")):
-    """Return paths for model.pkl and scaler.pkl if present."""
     found = {}
     for root, _, files in os.walk(model_dir):
         for fname in files:
@@ -44,7 +43,6 @@ def find_artifact_files(model_dir, names=("model.pkl", "scaler.pkl")):
     return found
 
 def load_latest_model_and_scaler(mr, model_name="rf_aqi_model"):
-    """Download latest model from registry and return (model, scaler)."""
     models = mr.get_models(model_name)
     if not models:
         raise RuntimeError(f"No models found in registry for name '{model_name}'")
@@ -89,10 +87,10 @@ def main():
     latest = df.iloc[[-1]].copy()
     log.info(f"📅 Using latest row timestamp: {latest['timestamp_utc'].iloc[0]}")
 
-    # Handle missing features gracefully
+    # Ensure all required features exist (fill missing with 0)
     for col in FEATURE_COLS:
         if col not in latest.columns:
-            log.warning(f"⚠️ Column '{col}' missing in feature group — filling with 0")
+            log.warning(f"⚠️ Column '{col}' missing — filling with 0")
             latest[col] = 0
 
     X = latest[FEATURE_COLS].astype("float64")
@@ -101,7 +99,7 @@ def main():
     model, scaler, model_version = load_latest_model_and_scaler(mr, model_name="rf_aqi_model")
 
     # Scale & predict
-    X_scaled = scaler.transform(X)  # no .values — scaler was trained with names
+    X_scaled = scaler.transform(X)
     pred = model.predict(X_scaled)[0]
 
     actual = None
@@ -117,10 +115,9 @@ def main():
 
     msg = (
         f"💨 Predicted AQI: {out['predicted_aqi']:.2f} "
-        f"(model v{out['model_version']}) | "
-        f"Observed AQI: {out['observed_aqi']}"
-        if out["observed_aqi"] is not None
-        else f"💨 Predicted AQI: {out['predicted_aqi']:.2f} (model v{out['model_version']})"
+        f"(model v{out['model_version']}) | Observed AQI: {out['observed_aqi']}"
+        if out["observed_aqi"] is not None else
+        f"💨 Predicted AQI: {out['predicted_aqi']:.2f} (model v{out['model_version']})"
     )
     log.info(msg)
     log.info("✅ Prediction completed successfully.")
