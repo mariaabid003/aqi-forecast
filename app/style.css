@@ -1,0 +1,17 @@
+/* Clean, modern look */
+body {
+    background-color: #f5f7fa;
+    color: #222;
+    font-family: 'Poppins', sans-serif;
+}
+
+h1, h2, h3 {
+    text-align: center;
+}
+
+div.stMetric {
+    background: #fff;
+    border-radius: 16px;
+    padding: 20px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}

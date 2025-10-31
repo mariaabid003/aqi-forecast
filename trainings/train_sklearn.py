@@ -46,7 +46,7 @@ df = fg.read()
 logging.info(f"✅ Loaded dataset: {df.shape[0]} rows, {df.shape[1]} columns")
 
 # ─────────────────────────────────────────────
-# 🧠 Prepare Features and Target
+# 🧠 Prepare Features and Target (Forecast)
 # ─────────────────────────────────────────────
 feature_cols = [
     "ow_temp", "ow_pressure", "ow_humidity", "ow_wind_speed", "ow_wind_deg",
@@ -54,19 +54,21 @@ feature_cols = [
     "hour", "day", "month", "weekday",
     "lag_1", "lag_2", "rolling_mean_3"
 ]
-target_col = "aqi_aqicn"
 
-df = df.dropna(subset=feature_cols + [target_col])
+# Predict NEXT AQI (shift -1)
+df["target_aqi_next"] = df["aqi_aqicn"].shift(-1)
+df.dropna(subset=feature_cols + ["target_aqi_next"], inplace=True)
+
 X = df[feature_cols].astype("float64")
-y = df[target_col].astype("float64")
+y = df["target_aqi_next"].astype("float64")
 
-logging.info(f"✅ Data prepared for training. Features: {X.shape}, Target: {y.shape}")
+logging.info(f"✅ Data ready: {X.shape[0]} samples, {len(feature_cols)} features.")
 
 # ─────────────────────────────────────────────
-# ✂️ Train/Test Split
+# ✂️ Train/Test Split (No Shuffle for Forecasting)
 # ─────────────────────────────────────────────
 X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, shuffle=True
+    X, y, test_size=0.2, shuffle=False
 )
 logging.info(f"📊 Train size: {len(X_train)}, Test size: {len(X_test)}")
 
@@ -114,7 +116,7 @@ logging.info(f"✅ Test RMSE: {rmse:.3f}")
 logging.info(f"✅ Test MAE: {mae:.3f}")
 
 # ─────────────────────────────────────────────
-# 🔁 Retrain on Full Dataset
+# 🔁 Retrain on Full Dataset for Deployment
 # ─────────────────────────────────────────────
 logging.info("🔁 Retraining model on full dataset for deployment...")
 X_scaled_full = scaler.fit_transform(X)
@@ -149,7 +151,7 @@ mr = project.get_model_registry()
 model = mr.python.create_model(
     name="rf_aqi_model",
     metrics=metadata,
-    description="Random Forest model for AQI prediction trained on preprocessed Karachi data."
+    description="Random Forest model for AQI prediction trained to forecast next AQI value."
 )
 model.save(model_dir)
 logging.info("🚀 Model successfully uploaded to Hopsworks Model Registry.")

@@ -1,232 +1,228 @@
-"""
-🌸 AQI Forecast Dashboard — Random Forest + Hopsworks Model Registry
--------------------------------------------------------------------
-✅ Today AQI Prediction + 3-Day Recursive Forecast
-✅ Latest Feature Data from Hopsworks Feature Store
-✅ Actual vs Predicted Performance Chart
-✅ Trend, Heatmap, Summary Stats
-✅ No Local File Dependency
-"""
-
 import os
 import joblib
-import numpy as np
 import pandas as pd
+import numpy as np
 import hopsworks
+from dotenv import load_dotenv
+from datetime import datetime
+import streamlit as st
+import glob
+import logging
 import matplotlib.pyplot as plt
 import seaborn as sns
-import streamlit as st
-from dotenv import load_dotenv
-from datetime import datetime, timedelta
-from sklearn.metrics import mean_squared_error, r2_score
 
-# -----------------------------
-# 🌸 Streamlit Styling
-# -----------------------------
-st.set_page_config(page_title="AQI Forecast Dashboard 🌤️", layout="wide")
-st.markdown("""
-<style>
-body {
-    background: linear-gradient(135deg, #e3f2fd, #fce4ec, #ede7f6);
-    color: #333;
-    font-family: "Poppins", sans-serif;
-}
-.main-title {
-    text-align: center;
-    font-size: 2.2rem;
-    color: #6a1b9a;
-    margin-bottom: 1rem;
-}
-.sub-header {
-    font-size: 1.3rem;
-    color: #1565c0;
-    margin-top: 1.2rem;
-    margin-bottom: 0.5rem;
-}
-.stButton>button {
-    background-color: #ba68c8;
-    color: white;
-    font-weight: 600;
-    border-radius: 10px;
-    padding: 0.6em 1.2em;
-    border: none;
-}
-.stButton>button:hover {
-    background-color: #ab47bc;
-    color: white;
-}
-</style>
-""", unsafe_allow_html=True)
+# ─────────────────────────────
+# 🪵 Logging Setup
+# ─────────────────────────────
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-st.title("🌤️ AQI Forecast Dashboard")
-st.caption("Air Quality Prediction with Explainable Insights")
+# ─────────────────────────────
+# 🎨 Streamlit Page Config
+# ─────────────────────────────
+st.set_page_config(
+    page_title="🌤️ AQI Forecast Dashboard",
+    page_icon="💨",
+    layout="wide"
+)
 
-# -----------------------------
-# 🔐 Load Hopsworks Environment
-# -----------------------------
+# Load custom CSS
+if os.path.exists("style.css"):
+    with open("style.css") as f:
+        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
+# ─────────────────────────────
+# 🔐 Environment Variables
+# ─────────────────────────────
 load_dotenv()
 API_KEY = os.getenv("aqi_forecast_api_key") or os.getenv("HOPSWORKS_API_KEY")
 if not API_KEY:
-    st.error("API key missing. Set AQI_FORECAST_API_KEY or HOPSWORKS_API_KEY")
+    st.error("❌ Missing Hopsworks API key! Please set it in your environment.")
     st.stop()
 
-# -----------------------------
-# 🔌 Connect to Hopsworks
-# -----------------------------
+# ─────────────────────────────
+# 🔗 Hopsworks Connection
+# ─────────────────────────────
+st.title("🌤️ Air Quality Index (AQI) Dashboard")
+st.write("Get the latest predicted AQI and explore insights through data analysis.")
+
 try:
     project = hopsworks.login(api_key_value=API_KEY)
     fs = project.get_feature_store()
-    st.success("✅ Connected to Hopsworks")
+    mr = project.get_model_registry()
+    st.success("✅ Connected to Hopsworks!")
 except Exception as e:
-    st.error(f"Hopsworks Login Failed: {e}")
+    st.error(f"Connection failed: {e}")
     st.stop()
 
-# -----------------------------
-# 📌 Load Features from Feature Store
-# -----------------------------
+# ─────────────────────────────
+# 📥 Load Feature Data
+# ─────────────────────────────
 try:
     fg = fs.get_feature_group("aqi_features", version=1)
     df = fg.read()
-    st.success("✅ Feature data loaded")
+    df.replace([np.inf, -np.inf], np.nan, inplace=True)
+    df.ffill(inplace=True)
+    df.bfill(inplace=True)
 except Exception as e:
-    st.error(f"Feature group error: {e}")
+    st.error(f"Error loading feature data: {e}")
     st.stop()
 
-# -----------------------------
-# Data cleaning
-# -----------------------------
-df.replace([np.inf, -np.inf], np.nan, inplace=True)
-df.ffill(inplace=True)
-df.bfill(inplace=True)
-
-TARGET = "aqi_aqicn"
-FEATURE_COLS = [
+# ─────────────────────────────
+# 🎯 Select Latest Record
+# ─────────────────────────────
+latest = df.sort_values(by="datetime", ascending=False).head(1) if "datetime" in df.columns else df.tail(1)
+feature_cols = [
     "ow_temp", "ow_pressure", "ow_humidity", "ow_wind_speed", "ow_wind_deg",
     "ow_clouds", "ow_co", "ow_no2", "ow_pm2_5", "ow_pm10",
     "hour", "day", "month", "weekday",
     "lag_1", "lag_2", "rolling_mean_3"
 ]
 
-# Compute lag and rolling features
-df["lag_1"] = df[TARGET].shift(1)
-df["lag_2"] = df[TARGET].shift(2)
-df["rolling_mean_3"] = df[TARGET].rolling(window=3).mean()
-df.drop(columns=["timestamp_utc"], errors="ignore", inplace=True)
-df.dropna(subset=[TARGET] + FEATURE_COLS, inplace=True)
+latest = latest.dropna(subset=feature_cols)
+X = latest[feature_cols].astype("float64")
 
-# -----------------------------
-# 🤖 Load RF Model and Scaler (latest version)
-# -----------------------------
-mr = project.get_model_registry()
+# ─────────────────────────────
+# 🤖 Load Model and Scaler
+# ─────────────────────────────
+all_models = mr.get_models("rf_aqi_model")
+latest_model = max(all_models, key=lambda m: m.version)
+model_dir = latest_model.download()
 
-try:
-    all_models = mr.get_models("rf_aqi_model")
-    latest_model = max(all_models, key=lambda m: m.version)
-    model_dir = latest_model.download()
+model_path = glob.glob(os.path.join(model_dir, "**/model.pkl"), recursive=True)[0]
+scaler_path = glob.glob(os.path.join(model_dir, "**/scaler.pkl"), recursive=True)[0]
 
-    model_path, scaler_path = None, None
-    for root, _, files in os.walk(model_dir):
-        for f in files:
-            if f == "model.pkl":
-                model_path = os.path.join(root, f)
-            elif f == "scaler.pkl":
-                scaler_path = os.path.join(root, f)
+model = joblib.load(model_path)
+scaler = joblib.load(scaler_path)
+st.success(f"📦 Model version {latest_model.version} loaded successfully.")
 
-    if not model_path or not scaler_path:
-        raise FileNotFoundError(f"Could not locate model.pkl or scaler.pkl inside: {model_dir}")
+# ─────────────────────────────
+# 🔮 Predict AQI
+# ─────────────────────────────
+X_scaled = scaler.transform(X.values)
+pred = model.predict(X_scaled)[0]
+today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    model = joblib.load(model_path)
-    scaler = joblib.load(scaler_path)
-    st.success(f"✅ Random Forest model (version {latest_model.version}) loaded successfully")
-except Exception as e:
-    st.error(f"❌ Model loading failed: {e}")
-    st.stop()
+# ─────────────────────────────
+# 📊 Dashboard Display
+# ─────────────────────────────
+st.subheader("🌤️ Today's AQI Prediction")
+st.metric(label="Predicted AQI", value=f"{pred:.2f}")
+st.write(f"📅 Date: {today}")
 
-# -----------------------------
-# 🎯 AQI Category Helper
-# -----------------------------
-def aqi_category(aqi):
-    if aqi <= 50: return "🟢 Good"
-    if aqi <= 100: return "🟡 Moderate"
-    if aqi <= 150: return "🟠 USG"
-    if aqi <= 200: return "🔴 Unhealthy"
-    if aqi <= 300: return "🟣 Very Unhealthy"
-    return "⚫ Hazardous"
+# AQI category logic
+if pred <= 50:
+    status, color = "Good", "green"
+elif pred <= 100:
+    status, color = "Moderate", "gold"
+elif pred <= 150:
+    status, color = "Unhealthy (Sensitive)", "orange"
+elif pred <= 200:
+    status, color = "Unhealthy", "red"
+else:
+    status, color = "Very Unhealthy", "purple"
 
-# -----------------------------
-# 🔮 Today + Recursive 3-Day Forecast
-# -----------------------------
-last_row = df.iloc[-1].copy()
-current_features = last_row[FEATURE_COLS].copy()
-base_date = datetime.now()
-future_preds = []
+st.markdown(f"<h3 style='color:{color}'>{status}</h3>", unsafe_allow_html=True)
 
-today_pred = model.predict(scaler.transform([current_features]))[0]
+# Optional: show latest weather inputs
+with st.expander("🌡️ View Latest Input Features"):
+    st.dataframe(latest[feature_cols].T)
 
-for i in range(1, 4):
-    future_date = base_date + timedelta(days=i)
-    current_features["hour"] = future_date.hour
-    current_features["day"] = future_date.day
-    current_features["month"] = future_date.month
-    current_features["weekday"] = future_date.weekday()
+# ─────────────────────────────
+# 📈 Exploratory Data Analysis (EDA)
+# ─────────────────────────────
+st.markdown("---")
+st.header("📊 Exploratory Data Analysis (EDA)")
 
-    # Predict AQI
-    pred = model.predict(scaler.transform([current_features]))[0]
-    future_preds.append({
-        "Date": future_date.strftime("%Y-%m-%d"),
-        "Predicted AQI": round(pred, 2),
-        "Category": aqi_category(pred)
-    })
+# ✅ Use correct time and AQI columns
+time_col = "timestamp_utc"
+aqi_col = "aqi_aqicn"
 
-    # Update lag and rolling features for next recursive step
-    current_features["lag_2"] = current_features["lag_1"]
-    current_features["lag_1"] = pred
-    current_features["rolling_mean_3"] = np.mean([current_features["lag_1"], current_features["lag_2"], pred])
-
-forecast_df = pd.DataFrame(future_preds)
-
-# -----------------------------
-# 🌞 Display Forecast
-# -----------------------------
-st.subheader("🌞 Today's AQI Prediction")
-st.metric(f"AQI — {aqi_category(today_pred)}", f"{today_pred:.2f}")
-
-st.subheader("📅 Forecast for Next 3 Days")
-st.dataframe(forecast_df, use_container_width=True)
-
-# -----------------------------
-# 📈 Actual vs Predicted Performance
-# -----------------------------
-df["predicted"] = model.predict(scaler.transform(df[FEATURE_COLS]))
-mse = mean_squared_error(df[TARGET], df["predicted"])
-r2 = r2_score(df[TARGET], df["predicted"])
-st.write(f"📌 Model Performance — R²: `{r2:.2f}` | MSE: `{mse:.2f}`")
+# Select last 100 records for smoother plots
+eda_df = df.sort_values(time_col).tail(100)
 
 col1, col2 = st.columns(2)
 
+# 🔹 1. AQI Trend Over Time
 with col1:
-    st.markdown("<h3 class='sub-header'>📊 Actual vs Predicted AQI</h3>", unsafe_allow_html=True)
-    fig1, ax1 = plt.subplots(figsize=(10, 4))
-    ax1.plot(df[TARGET].tail(100).values, label="Actual", linewidth=2)
-    ax1.plot(df["predicted"].tail(100).values, label="Predicted", linestyle="--")
-    ax1.legend()
-    st.pyplot(fig1)
+    st.subheader("📆 AQI Trend Over Time")
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(eda_df[time_col], eda_df[aqi_col], marker='o', linestyle='-', color='skyblue')
+    ax.set_title("AQI Over Time")
+    ax.set_xlabel("Time (UTC)")
+    ax.set_ylabel("AQI")
+    plt.xticks(rotation=45)
+    st.pyplot(fig)
 
+# 🔹 2. Correlation Heatmap
 with col2:
-    st.markdown("<h3 class='sub-header'>🔗 AQI Feature Correlation</h3>", unsafe_allow_html=True)
-    corr = df[FEATURE_COLS + [TARGET]].corr()
-    fig2, ax2 = plt.subplots(figsize=(10, 6))
-    sns.heatmap(corr, cmap="coolwarm", ax=ax2)
-    st.pyplot(fig2)
+    st.subheader("🔥 Correlation Heatmap")
+    cols_for_corr = [
+        "aqi_aqicn", "ow_temp", "ow_pressure", "ow_humidity",
+        "ow_wind_speed", "ow_wind_deg", "ow_clouds",
+        "ow_co", "ow_no2", "ow_pm2_5", "ow_pm10",
+        "lag_1", "lag_2", "rolling_mean_3"
+    ]
+    corr = eda_df[cols_for_corr].corr()
+    fig, ax = plt.subplots(figsize=(7, 5))
+    sns.heatmap(corr, cmap="coolwarm", center=0, ax=ax)
+    ax.set_title("Feature Correlation with AQI")
+    st.pyplot(fig)
 
-# -----------------------------
-# 📋 Summary Statistics
-# -----------------------------
-st.markdown("<h3 class='sub-header'>📋 Summary Statistics</h3>", unsafe_allow_html=True)
-st.dataframe(df[FEATURE_COLS + [TARGET]].describe().T.round(2), use_container_width=True)
+# 🔹 3. Scatter Plots (Weather vs AQI)
+st.subheader("🌡️ AQI vs Weather Parameters")
+cols = st.columns(3)
+features_to_plot = ["ow_temp", "ow_humidity", "ow_wind_speed"]
+for i, feature in enumerate(features_to_plot):
+    with cols[i]:
+        fig, ax = plt.subplots(figsize=(5, 3))
+        sns.scatterplot(
+            x=eda_df[feature],
+            y=eda_df[aqi_col],
+            color="dodgerblue",
+            alpha=0.7,
+            ax=ax
+        )
+        ax.set_title(f"AQI vs {feature}")
+        st.pyplot(fig)
 
-# -----------------------------
-# 🔁 Refresh Button
-# -----------------------------
-if st.sidebar.button("🔄 Refresh Dashboard"):
-    st.experimental_rerun()
+# 🔹 4. Feature Importance (for Random Forest)
+st.subheader("🌲 Feature Importance (Model Insight)")
+if hasattr(model, "feature_importances_"):
+    importances = pd.Series(model.feature_importances_, index=feature_cols).sort_values(ascending=False)
+    fig, ax = plt.subplots(figsize=(10, 4))
+    sns.barplot(x=importances.values, y=importances.index, palette="viridis", ax=ax)
+    ax.set_title("Feature Importance in AQI Prediction")
+    st.pyplot(fig)
+else:
+    st.info("Feature importance not available for this model.")
+
+# 🔹 5. Actual vs Predicted AQI Trend
+st.subheader("📈 Actual vs Predicted AQI Trend")
+
+try:
+    # Select last 50 records for manageable plotting
+    compare_df = df.sort_values(time_col).tail(50)
+
+    # Ensure all required features exist and are numeric
+    compare_df = compare_df.dropna(subset=feature_cols)
+    X_compare = compare_df[feature_cols].astype("float64")
+    X_scaled_compare = scaler.transform(X_compare.values)
+    compare_df["Predicted_AQI"] = model.predict(X_scaled_compare)
+
+    # Plot comparison
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.plot(compare_df[time_col], compare_df[aqi_col], label="Actual AQI", color="skyblue", linewidth=2, marker="o")
+    ax.plot(compare_df[time_col], compare_df["Predicted_AQI"], label="Predicted AQI", color="orange", linewidth=2, marker="x")
+    ax.set_title("Actual vs Predicted AQI Over Time")
+    ax.set_xlabel("Time (UTC)")
+    ax.set_ylabel("AQI")
+    ax.legend()
+    plt.xticks(rotation=45)
+    st.pyplot(fig)
+
+    # Show latest comparison in table form
+    with st.expander("📋 View Recent Actual vs Predicted Data"):
+        st.dataframe(compare_df[[time_col, aqi_col, "Predicted_AQI"]].tail(10))
+except Exception as e:
+    st.error(f"Error generating Actual vs Predicted plot: {e}")
+
