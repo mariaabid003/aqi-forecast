@@ -1,8 +1,29 @@
 {
-    "train_r2": 0.9055718630844137,
-    "test_r2": 0.16648561331485567,
-    "rmse": 12.581418945221015,
-    "mae": 8.738763069358182,
-    "cv_rmse_mean": 92.06457522022687,
-    "cv_rmse_std": 104.55980341127778
+    "model_name": "rf_aqi_model",
+    "version": null,
+    "r2": 0.9321561192157226,
+    "rmse": 6.872044432524362,
+    "mae": 2.9110705266955255,
+    "features": [
+        "ow_temp",
+        "ow_pressure",
+        "ow_humidity",
+        "ow_wind_speed",
+        "ow_wind_deg",
+        "ow_clouds",
+        "ow_co",
+        "ow_no2",
+        "ow_pm2_5",
+        "ow_pm10",
+        "hour",
+        "day",
+        "month",
+        "weekday",
+        "lag_1",
+        "lag_2",
+        "lag_3",
+        "rolling_mean_3",
+        "rolling_mean_6"
+    ],
+    "target": "aqi_aqicn"
 }

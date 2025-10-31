@@ -1,10 +1,10 @@
-name: Run AQI Forecasting Pipeline
+name: Run AQI Forecasting Pipeline (Hourly)
 
 on:
   workflow_dispatch:  # manual trigger
   schedule:
-    # Runs every 4 hours
-    - cron: '0 */4 * * *'
+    # Runs every hour
+    - cron: '0 * * * *'
 
 jobs:
   run-pipeline:
@@ -21,7 +21,7 @@ jobs:
       # 2. Set up Python 3.10
       # -------------------------
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
@@ -58,31 +58,9 @@ jobs:
         run: python features/backfill.py
 
       # -------------------------
-      # 6. Train Sklearn Model (Primary)
+      # 6. Generate AQI Prediction
       # -------------------------
-      - name: Train Sklearn Model
-        env:
-          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-          AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
-          aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
-          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
-        run: python trainings/train_sklearn.py
-
-      # -------------------------
-      # 7. Train TensorFlow Model (Secondary)
-      # -------------------------
-      - name: Train TensorFlow Model
-        env:
-          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-          AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
-          aqi_forecast_api_key: ${{ secrets.aqi_forecast_api_key }}
-          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
-        run: python trainings/train_tf.py
-
-      # -------------------------
-      # 8. Generate Today's AQI Prediction
-      # -------------------------
-      - name: Generate Today’s AQI Prediction
+      - name: Generate AQI Prediction
         env:
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
           AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
@@ -90,18 +68,17 @@ jobs:
           HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
         run: |
           mkdir -p data
-          python trainings/predict.py
-          echo "✅ Today's AQI prediction generated successfully"
+          python predict.py
+          echo "✅ AQI prediction generated successfully"
           cat data/todays_aqi_prediction.csv || echo "⚠️ No prediction CSV found!"
 
       # -------------------------
-      # 9. Upload Artifacts
+      # 7. Upload Artifacts
       # -------------------------
       - name: Upload Artifacts (models, logs, prediction)
         uses: actions/upload-artifact@v4
         with:
-          name: aqi-artifacts
+          name: aqi-hourly-artifacts
           path: |
-            models/
             logs/
             data/todays_aqi_prediction.csv
