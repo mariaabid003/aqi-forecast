@@ -5,7 +5,7 @@ import hopsworks
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 from dotenv import load_dotenv
 import joblib
 import json
@@ -13,65 +13,42 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-# -----------------------------
-# 🔐 Load environment variables
-# -----------------------------
 load_dotenv()
 HOPSWORKS_API_KEY = os.getenv("aqi_forecast_api_key") or os.getenv("HOPSWORKS_API_KEY")
 
-# -----------------------------
-# 📦 Configuration
-# -----------------------------
 FEATURE_GROUP_NAME = "aqi_features"
 FEATURE_GROUP_VERSION = 1
 MODEL_NAME = "rf_aqi_model"
 MODEL_DIR = "rf_aqi_model"
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-# -----------------------------
-# ⚙️ Utility functions
-# -----------------------------
 def preprocess_features(df):
     df = df.sort_values("timestamp_utc").reset_index(drop=True)
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df.ffill(inplace=True)
-
-    # Lags and rolling mean (match backfill.py)
     if "lag_1" not in df.columns:
         df["lag_1"] = df["aqi_aqicn"].shift(1).bfill().fillna(0)
     if "lag_2" not in df.columns:
         df["lag_2"] = df["aqi_aqicn"].shift(2).bfill().fillna(0)
     if "rolling_mean_3" not in df.columns:
         df["rolling_mean_3"] = df["aqi_aqicn"].rolling(window=3, min_periods=1).mean()
-
     df.dropna(inplace=True)
     return df
 
 def train_test_split_time(df, test_size=0.2):
     split_idx = int(len(df) * (1 - test_size))
-    train_df = df.iloc[:split_idx]
-    test_df = df.iloc[split_idx:]
-    return train_df, test_df
+    return df.iloc[:split_idx], df.iloc[split_idx:]
 
-# -----------------------------
-# 🚀 Connect to Hopsworks
-# -----------------------------
-print("🔐 Connecting to Hopsworks...")
+print("Connecting to Hopsworks...")
 project = hopsworks.login(api_key_value=HOPSWORKS_API_KEY)
 fs = project.get_feature_store()
 
-# -----------------------------
-# 📥 Load Feature Data
-# -----------------------------
 fg = fs.get_feature_group(FEATURE_GROUP_NAME, version=FEATURE_GROUP_VERSION)
 df = fg.read()
-print(f"✅ Loaded dataset: {len(df)} rows, {len(df.columns)} columns")
+print(f"Loaded dataset with {len(df)} rows and {len(df.columns)} columns.")
 
 df = preprocess_features(df)
 
-# -----------------------------
-# 🧩 Prepare features and labels
-# -----------------------------
 feature_cols = [
     "ow_temp", "ow_pressure", "ow_humidity", "ow_wind_speed",
     "ow_wind_deg", "ow_clouds", "ow_co", "ow_no2",
@@ -85,28 +62,18 @@ df = df.dropna(subset=[target_col]).reset_index(drop=True)
 X = df[feature_cols]
 y = df[target_col]
 
-print(f"✅ Data ready: {len(X)} samples, {len(feature_cols)} features.")
+print(f"Data ready for training: {len(X)} samples with {len(feature_cols)} features.")
 
-# -----------------------------
-# ⏳ Time-based Split
-# -----------------------------
-train_df, test_df = train_test_split_time(df, test_size=0.2)
+train_df, test_df = train_test_split_time(df)
 X_train, y_train = train_df[feature_cols], train_df[target_col]
 X_test, y_test = test_df[feature_cols], test_df[target_col]
-print(f"📊 Train size: {len(X_train)}, Test size: {len(X_test)}")
+print(f"Training on {len(X_train)} samples, testing on {len(X_test)} samples.")
 
-# -----------------------------
-# ⚖️ Feature Scaling
-# -----------------------------
 scaler = StandardScaler()
 X_train_scaled = scaler.fit_transform(X_train)
 X_test_scaled = scaler.transform(X_test)
 
-# -----------------------------
-# 🌲 Model Training (Random Forest)
-# -----------------------------
-print("🚀 Training Random Forest with 5-fold TimeSeries CV...")
-
+print("Training Random Forest model...")
 rf = RandomForestRegressor(
     n_estimators=300,
     max_depth=10,
@@ -114,56 +81,29 @@ rf = RandomForestRegressor(
     min_samples_leaf=3,
     random_state=42
 )
-
-tscv = TimeSeriesSplit(n_splits=5)
-cv_rmse = []
-
-for train_idx, val_idx in tscv.split(X_train_scaled):
-    X_tr, X_val = X_train_scaled[train_idx], X_train_scaled[val_idx]
-    y_tr, y_val = y_train.iloc[train_idx], y_train.iloc[val_idx]
-    rf.fit(X_tr, y_tr)
-    preds = rf.predict(X_val)
-    rmse = np.sqrt(mean_squared_error(y_val, preds))
-    cv_rmse.append(rmse)
-
-print(f"📊 CV RMSE (5-fold): {np.round(cv_rmse, 3)} | Mean: {np.mean(cv_rmse):.3f}")
-
-# -----------------------------
-# 🧠 Evaluate on Train & Test
-# -----------------------------
 rf.fit(X_train_scaled, y_train)
-y_train_pred = rf.predict(X_train_scaled)
-y_test_pred = rf.predict(X_test_scaled)
 
-train_r2 = r2_score(y_train, y_train_pred)
-test_r2 = r2_score(y_test, y_test_pred)
-test_rmse = np.sqrt(mean_squared_error(y_test, y_test_pred))
-test_mae = mean_absolute_error(y_test, y_test_pred)
+y_pred = rf.predict(X_test_scaled)
+r2 = r2_score(y_test, y_pred)
+rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+mae = mean_absolute_error(y_test, y_pred)
 
-print(f"✅ Train R²: {train_r2:.3f}")
-print(f"✅ Test  R²: {test_r2:.3f}")
-print(f"✅ Test RMSE: {test_rmse:.3f}")
-print(f"✅ Test MAE: {test_mae:.3f}")
+print("\nModel performance on test data:")
+print(f"R² Score: {r2:.3f}")
+print(f"RMSE: {rmse:.3f}")
+print(f"MAE: {mae:.3f}")
 
-# -----------------------------
-# 🔁 Retrain on Full Data
-# -----------------------------
-print("🔁 Retraining model on full dataset for deployment...")
 rf.fit(scaler.fit_transform(X), y)
 
-# -----------------------------
-# 💾 Save Model and Metadata
-# -----------------------------
 joblib.dump(rf, os.path.join(MODEL_DIR, "model.pkl"))
 joblib.dump(scaler, os.path.join(MODEL_DIR, "scaler.pkl"))
 
 metadata = {
     "model_name": MODEL_NAME,
     "version": None,
-    "train_r2": float(train_r2),
-    "test_r2": float(test_r2),
-    "rmse": float(test_rmse),
-    "mae": float(test_mae),
+    "r2": float(r2),
+    "rmse": float(rmse),
+    "mae": float(mae),
     "features": feature_cols,
     "target": target_col
 }
@@ -171,18 +111,14 @@ metadata = {
 with open(os.path.join(MODEL_DIR, "metadata.json"), "w") as f:
     json.dump(metadata, f, indent=4)
 
-print("💾 Model, scaler, and metadata saved locally.")
+print("\nModel and metadata saved locally.")
 
-# -----------------------------
-# ⬆️ Upload to Hopsworks
-# -----------------------------
 mr = project.get_model_registry()
 model = mr.python.create_model(
     name=MODEL_NAME,
-    metrics={"train_r2": train_r2, "test_r2": test_r2, "rmse": test_rmse, "mae": test_mae},
-    description="Random Forest model for AQI forecasting with temporal features"
+    metrics={"r2": r2, "rmse": rmse, "mae": mae},
+    description="Random Forest model for AQI forecasting with weather and temporal features."
 )
 
 model.save(MODEL_DIR)
-print(f"🚀 Model successfully uploaded to Hopsworks Model Registry.")
-print("✅ Done.")
+print("Model successfully uploaded to Hopsworks.")

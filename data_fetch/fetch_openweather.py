@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-# data_fetch/fetch_openweather.py
-"""
-Fetch current air pollution from OpenWeather and save a timestamped parquet file + a latest snapshot.
-"""
 import os
 import argparse
 import logging
@@ -14,7 +10,7 @@ from dotenv import load_dotenv
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-def get_retry_session(retries=3, backoff=1, status_forcelist=(429,500,502,503,504)):
+def get_retry_session(retries=3, backoff=1, status_forcelist=(429, 500, 502, 503, 504)):
     s = requests.Session()
     retry = Retry(
         total=retries,
@@ -47,7 +43,6 @@ def parse_response(j):
         "timestamp_utc": ts.isoformat(),
         "aqi_ow": main.get("aqi")
     }
-    # flatten components: pm2_5, pm10, no2, so2, o3, co, nh3
     for k, v in comps.items():
         out[f"ow_{k}"] = v
     return out
@@ -58,7 +53,6 @@ def save(df: pd.DataFrame, out_dir: str):
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     file_path = out_dir / f"openweather_{ts}.parquet"
     df.to_parquet(file_path, index=False)
-    # also keep a single 'latest' snapshot (overwrite)
     df.to_parquet(out_dir / "latest_openweather.parquet", index=False)
     logging.info("Saved %s and updated latest_openweather.parquet", file_path)
 

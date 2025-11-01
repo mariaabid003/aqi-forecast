@@ -6,9 +6,6 @@ import requests
 from dotenv import load_dotenv
 import hopsworks
 
-# ─────────────────────────────────────────────
-# 🔐 Load Environment Variables
-# ─────────────────────────────────────────────
 env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 load_dotenv(env_path)
 
@@ -16,11 +13,8 @@ OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 AQICN_TOKEN = os.getenv("AQICN_TOKEN")
 HOPSWORKS_API_KEY = os.getenv("aqi_forecast_api_key") or os.getenv("HOPSWORKS_API_KEY")
 
-LAT, LON = 24.8607, 67.0011  # Karachi coordinates
+LAT, LON = 24.8607, 67.0011
 
-# ─────────────────────────────────────────────
-# 🌦️ Fetch current weather data
-# ─────────────────────────────────────────────
 def fetch_current_weather():
     try:
         url = (
@@ -34,44 +28,32 @@ def fetch_current_weather():
         print(f"Error fetching weather: {e}")
         return {}
 
-# ─────────────────────────────────────────────
-# 💨 Fetch current AQI (from Karachi US Consulate station)
-# ─────────────────────────────────────────────
 def fetch_current_aqi():
     try:
-        # ✅ Fixed station ID (Karachi US Consulate)
-        url = f"https://api.waqi.info/feed/@11790/?token={AQICN_TOKEN}"
+        url = f"https://api.waqi.info/feed/geo:{LAT};{LON}/?token={AQICN_TOKEN}"
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         data = resp.json().get("data", {})
-
-        # Debug output
         station_name = data.get("city", {}).get("name", "Unknown Station")
-        print(f"🌆 Station: {station_name}")
-        print(f"💨 Live AQI: {data.get('aqi')}")
-        print(f"🧪 Dominant Pollutant: {data.get('dominentpol')}")
+        print(f"Station: {station_name}")
+        print(f"Live AQI: {data.get('aqi')}")
+        print(f"Dominant Pollutant: {data.get('dominentpol')}")
         return data
     except Exception as e:
         print(f"Error fetching AQI: {e}")
         return {}
 
-# ─────────────────────────────────────────────
-# 🧩 Combine and structure fetched data
-# ─────────────────────────────────────────────
 def fetch_real_data():
     weather = fetch_current_weather()
     aqi = fetch_current_aqi()
-
     if not weather or not aqi:
-        print("⚠️ Could not fetch data properly.")
+        print("Could not fetch data properly.")
         return pd.DataFrame()
-
     now = datetime.now(timezone.utc)
     main = weather.get("main", {})
     wind = weather.get("wind", {})
     clouds = weather.get("clouds", {})
     iaqi = aqi.get("iaqi", {})
-
     row = {
         "timestamp_utc": now,
         "ow_temp": main.get("temp"),
@@ -90,23 +72,17 @@ def fetch_real_data():
         "month": now.month,
         "weekday": now.weekday(),
     }
-
     df = pd.DataFrame([row])
     df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"], utc=True)
     return df
 
-# ─────────────────────────────────────────────
-# ⚙️ Preprocess data before upload
-# ─────────────────────────────────────────────
 def preprocess_features(df):
     df = df.sort_values("timestamp_utc").reset_index(drop=True)
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df.ffill(inplace=True)
-
     df["lag_1"] = df["aqi_aqicn"].shift(1).fillna(method="ffill").fillna(0)
     df["lag_2"] = df["aqi_aqicn"].shift(2).fillna(method="ffill").fillna(0)
     df["rolling_mean_3"] = df["aqi_aqicn"].rolling(window=3, min_periods=1).mean()
-
     float_cols = [
         "ow_temp", "ow_pressure", "ow_humidity",
         "ow_wind_speed", "ow_wind_deg", "ow_clouds",
@@ -114,24 +90,17 @@ def preprocess_features(df):
         "aqi_aqicn", "lag_1", "lag_2", "rolling_mean_3"
     ]
     time_int_cols = ["hour", "day", "month", "weekday"]
-
     df[float_cols] = df[float_cols].astype("float64")
     df[time_int_cols] = df[time_int_cols].astype("int64")
     df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"], utc=True)
-
     return df
 
-# ─────────────────────────────────────────────
-# 🚀 Main Backfill function
-# ─────────────────────────────────────────────
 def backfill():
     if not HOPSWORKS_API_KEY:
         print("Missing Hopsworks API key.")
         return
-
     project = hopsworks.login(api_key_value=HOPSWORKS_API_KEY)
     fs = project.get_feature_store()
-
     try:
         fg = fs.get_feature_group("aqi_features", 1)
         df_existing = fg.read()
@@ -146,23 +115,17 @@ def backfill():
             event_time="timestamp_utc",
         )
         print("Created new feature group aqi_features v1.")
-
     df_new = fetch_real_data()
     if df_new.empty:
         print("Nothing to update.")
         return
-
     df_combined = pd.concat([df_existing, df_new], ignore_index=True)
     df_clean = preprocess_features(df_combined)
     df_clean.drop_duplicates(subset=["timestamp_utc"], keep="last", inplace=True)
-
-    print(f"📤 Uploading {len(df_clean)} rows to Hopsworks...")
+    print(f"Uploading {len(df_clean)} rows to Hopsworks...")
     fg.insert(df_clean, write_options={"wait_for_job": True})
-    print("✅ Backfill complete.")
+    print("Backfill complete.")
 
-# ─────────────────────────────────────────────
-# 🏁 Entry Point
-# ─────────────────────────────────────────────
 if __name__ == "__main__":
     if not OPENWEATHER_API_KEY:
         print("Missing OpenWeather key.")

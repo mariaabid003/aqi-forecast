@@ -1,4 +1,3 @@
-# data_fetch/fetch_aqicn.py
 import os
 import requests
 import pandas as pd
@@ -12,13 +11,11 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
 )
 
-# Load environment variables
 load_dotenv()
 TOKEN = os.getenv("AQICN_TOKEN")
 if not TOKEN:
     raise ValueError("AQICN_TOKEN not found in environment (.env)")
 
-# AQICN API endpoint template
 BASE_URL = "https://api.waqi.info/feed/geo:{lat};{lon}/?token={token}"
 
 def fetch_aqicn(lat: float, lon: float) -> dict:
@@ -33,7 +30,6 @@ def parse_response(j: dict) -> dict:
     data = j.get("data", {})
     iaqi = data.get("iaqi", {})
 
-    # Extract main AQI + pollutants
     row = {
         "timestamp_utc": data.get("time", {}).get("utc"),
         "aqi_aqicn": data.get("aqi"),
@@ -43,20 +39,16 @@ def parse_response(j: dict) -> dict:
     return row
 
 if __name__ == "__main__":
-    # Example location: Karachi
     lat, lon = 24.8607, 67.0011
 
-    # Fetch + parse
     raw = fetch_aqicn(lat, lon)
     row = parse_response(raw)
     df = pd.DataFrame([row])
 
-    # Add timestamp for filename
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_dir = "data/raw_aqicn"
     os.makedirs(out_dir, exist_ok=True)
 
-    # Save both timestamped + latest snapshot
     ts_file = os.path.join(out_dir, f"aqicn_{ts}.parquet")
     latest_file = os.path.join(out_dir, "latest_aqicn.parquet")
 

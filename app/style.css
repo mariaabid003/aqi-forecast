@@ -1,17 +1,122 @@
-/* Clean, modern look */
+/* ─────────────────────────────
+   Modern AQI Dashboard Styling
+   ───────────────────────────── */
+
+/* Global layout */
 body {
-    background-color: #f5f7fa;
+    background: linear-gradient(135deg, #f8fbff 0%, #eef3f7 100%);
     color: #222;
     font-family: 'Poppins', sans-serif;
+    line-height: 1.6;
+    margin: 0;
 }
 
+/* Headings */
 h1, h2, h3 {
     text-align: center;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    color: #1b1f24;
 }
 
+h1 {
+    font-size: 2.2rem;
+    margin-bottom: 1rem;
+}
+
+h2 {
+    font-size: 1.6rem;
+    margin-top: 1.5rem;
+}
+
+h3 {
+    font-size: 1.2rem;
+    margin-top: 1rem;
+}
+
+/* Streamlit metric cards */
 div.stMetric {
-    background: #fff;
-    border-radius: 16px;
-    padding: 20px;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    background: #ffffff;
+    border-radius: 20px;
+    padding: 24px 18px;
+    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.07);
+    transition: all 0.3s ease;
+    border-left: 5px solid #3b82f6;
+}
+
+div.stMetric:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.1);
+}
+
+/* Dataframes & expanders */
+[data-testid="stDataFrame"] {
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+    background-color: #fff;
+}
+
+div.streamlit-expanderHeader {
+    background-color: #f0f4f8;
+    border-radius: 8px;
+    font-weight: 500;
+}
+
+/* Sidebar */
+section[data-testid="stSidebar"] {
+    background: #f4f6fa;
+    border-right: 1px solid #e3e6ea;
+}
+
+section[data-testid="stSidebar"] h2 {
+    color: #2563eb;
+    font-size: 1.3rem;
+}
+
+/* Buttons */
+button[kind="primary"] {
+    background: linear-gradient(90deg, #2563eb, #3b82f6);
+    border: none;
+    color: white;
+    border-radius: 8px;
+    padding: 0.6rem 1.2rem;
+    font-weight: 500;
+    transition: all 0.2s ease-in-out;
+}
+
+button[kind="primary"]:hover {
+    background: linear-gradient(90deg, #1e40af, #2563eb);
+    transform: translateY(-1px);
+}
+
+/* Charts */
+.plotly, canvas {
+    border-radius: 12px;
+    background-color: #fff;
+    padding: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+
+/* Subtle fade-in for dashboard sections */
+.block-container {
+    animation: fadeIn 0.6s ease-in-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Table text */
+table {
+    font-size: 0.9rem;
+}
+
+/* Footer or caption styling */
+footer, .stCaption {
+    color: #6b7280;
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 2rem;
 }

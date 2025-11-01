@@ -1,7 +1,6 @@
-# train_lstm.py
-
 import os
 import time
+import json
 import shutil
 import joblib
 import logging
@@ -11,110 +10,85 @@ import tensorflow as tf
 import hopsworks
 from dotenv import load_dotenv
 from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_squared_error, mean_absolute_error
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 
-# ──────────────────────────────────────────────────────────────
-# 🪵 Logging Configuration
-# ──────────────────────────────────────────────────────────────
-for handler in logging.root.handlers[:]:
-    logging.root.removeHandler(handler)
+# Logging setup
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+log = logging.getLogger("train_lstm")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
-log = logging.getLogger(__name__)
-
-# ──────────────────────────────────────────────────────────────
-# 🔐 Connect to Hopsworks
-# ──────────────────────────────────────────────────────────────
-log.info("🔐 Connecting to Hopsworks...")
+# Hopsworks connection
 load_dotenv()
-HOPSWORKS_API_KEY = os.getenv("aqi_forecast_api_key") or os.getenv("HOPSWORKS_API_KEY")
-if not HOPSWORKS_API_KEY:
-    raise ValueError("❌ Missing Hopsworks API key!")
+api_key = os.getenv("aqi_forecast_api_key") or os.getenv("HOPSWORKS_API_KEY")
+if not api_key:
+    raise ValueError("Hopsworks API key not found.")
 
-project = hopsworks.login(api_key_value=HOPSWORKS_API_KEY)
+log.info("Connecting to Hopsworks...")
+project = hopsworks.login(api_key_value=api_key)
 fs = project.get_feature_store()
 mr = project.get_model_registry()
 
-# ──────────────────────────────────────────────────────────────
-# 📥 Load Data from Feature Store
-# ──────────────────────────────────────────────────────────────
 def load_feature_data():
     fg = fs.get_feature_group(name="aqi_features", version=1)
     for attempt in range(3):
         try:
             df = fg.read()
-            log.info("✅ Data loaded via Arrow Flight.")
+            log.info("Data loaded successfully via Arrow Flight.")
             return df
         except Exception as e:
-            log.warning(f"⚠️ Attempt {attempt + 1} failed: {e}")
+            log.warning(f"Attempt {attempt + 1} failed: {e}")
             time.sleep(3)
-    log.info("🔁 Using fallback (pandas engine)...")
+    log.info("Falling back to pandas engine for data load.")
     return fg.read(read_options={"engine": "pandas"})
 
 df = load_feature_data()
-log.info(f"✅ Loaded data shape: {df.shape}")
+log.info(f"Loaded dataset with shape {df.shape}")
 
-# ──────────────────────────────────────────────────────────────
-# 🧹 Data Preparation
-# ──────────────────────────────────────────────────────────────
+# Data cleaning
 df.replace([np.inf, -np.inf], np.nan, inplace=True)
 df.ffill(inplace=True)
 df.bfill(inplace=True)
 
-TARGET = "aqi_aqicn"
-FEATURE_COLS = [
+target_col = "aqi_aqicn"
+feature_cols = [
     "ow_temp", "ow_pressure", "ow_humidity", "ow_wind_speed", "ow_wind_deg",
     "ow_clouds", "ow_co", "ow_no2", "ow_pm2_5", "ow_pm10",
     "hour", "day", "month", "weekday"
 ]
 
 df = df.drop(columns=["timestamp_utc"], errors="ignore")
-df = df.dropna(subset=FEATURE_COLS + [TARGET])
+df = df.dropna(subset=feature_cols + [target_col])
+
 if df.empty:
-    raise ValueError("🚨 Dataset empty after cleaning!")
+    raise ValueError("No data available after cleaning.")
 
-# ──────────────────────────────────────────────────────────────
-# 🔁 Create Time-Series Sequences
-# ──────────────────────────────────────────────────────────────
-SEQUENCE_LENGTH = 7  # use last 7 observations for prediction
-X_seq, y_seq = [], []
-for i in range(SEQUENCE_LENGTH, len(df)):
-    X_seq.append(df[FEATURE_COLS].iloc[i - SEQUENCE_LENGTH:i].values)
-    y_seq.append(df[TARGET].iloc[i])
+# Sequence generation
+sequence_len = 7
+X, y = [], []
+for i in range(sequence_len, len(df)):
+    X.append(df[feature_cols].iloc[i - sequence_len:i].values)
+    y.append(df[target_col].iloc[i])
 
-X_seq = np.array(X_seq)
-y_seq = np.array(y_seq)
-log.info(f"✅ Sequence shapes: X={X_seq.shape}, y={y_seq.shape}")
+X, y = np.array(X), np.array(y)
+log.info(f"Sequences created. X shape: {X.shape}, y shape: {y.shape}")
 
-# ──────────────────────────────────────────────────────────────
-# ⚖️ Scaling
-# ──────────────────────────────────────────────────────────────
+# Scaling
 os.makedirs("models", exist_ok=True)
-
-# Scale input features
 scaler_X = StandardScaler()
-n_samples, n_timesteps, n_features = X_seq.shape
-X_scaled_flat = scaler_X.fit_transform(X_seq.reshape(n_samples * n_timesteps, n_features))
-X_scaled = X_scaled_flat.reshape(n_samples, n_timesteps, n_features)
-joblib.dump(scaler_X, "models/tf_scaler_X.joblib")
-
-# Scale target
+n_samples, n_timesteps, n_features = X.shape
+X_scaled = scaler_X.fit_transform(X.reshape(n_samples * n_timesteps, n_features)).reshape(n_samples, n_timesteps, n_features)
 scaler_y = StandardScaler()
-y_scaled = scaler_y.fit_transform(y_seq.reshape(-1, 1))
+y_scaled = scaler_y.fit_transform(y.reshape(-1, 1))
+
+joblib.dump(scaler_X, "models/tf_scaler_X.joblib")
 joblib.dump(scaler_y, "models/tf_scaler_y.joblib")
+log.info("Feature and target scalers saved.")
 
-log.info("✅ Scalers saved successfully.")
-
-# ──────────────────────────────────────────────────────────────
-# 🧠 Build LSTM Model
-# ──────────────────────────────────────────────────────────────
+# Model setup
 model = Sequential([
-    LSTM(128, activation="tanh", input_shape=(SEQUENCE_LENGTH, len(FEATURE_COLS)), return_sequences=True),
+    LSTM(128, activation="tanh", return_sequences=True, input_shape=(sequence_len, len(feature_cols))),
     Dropout(0.3),
     LSTM(64, activation="tanh"),
     Dropout(0.2),
@@ -122,16 +96,10 @@ model = Sequential([
     Dense(1)
 ])
 
-model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
-    loss="mse",
-    metrics=["mae"]
-)
-log.info("✅ LSTM model compiled successfully.")
+model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001), loss="mse", metrics=["mae"])
+log.info("Model compiled successfully.")
 
-# ──────────────────────────────────────────────────────────────
-# 🚀 Train Model
-# ──────────────────────────────────────────────────────────────
+# Training
 early_stop = EarlyStopping(monitor="val_loss", patience=15, restore_best_weights=True)
 reduce_lr = ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=5, verbose=1)
 
@@ -145,53 +113,60 @@ history = model.fit(
     verbose=1
 )
 
+# Evaluation
 train_loss = float(history.history["loss"][-1])
 val_loss = float(history.history["val_loss"][-1])
 val_mae = float(history.history["mae"][-1])
-log.info(f"✅ Training complete → Train Loss={train_loss:.4f}, Val Loss={val_loss:.4f}, Val MAE={val_mae:.4f}")
 
-# ──────────────────────────────────────────────────────────────
-# 💾 Save Model & Artifacts
-# ──────────────────────────────────────────────────────────────
-MODEL_DIR = "models/tf_lstm_model"
-os.makedirs(MODEL_DIR, exist_ok=True)
+y_pred = model.predict(X_scaled)
+rmse = np.sqrt(mean_squared_error(y_scaled, y_pred))
+mae = mean_absolute_error(y_scaled, y_pred)
 
-model.save(f"{MODEL_DIR}/model.keras")
-joblib.dump(scaler_X, f"{MODEL_DIR}/scaler_X.joblib")
-joblib.dump(scaler_y, f"{MODEL_DIR}/scaler_y.joblib")
+log.info(
+    f"Training completed. "
+    f"Train Loss={train_loss:.4f}, Val Loss={val_loss:.4f}, "
+    f"Val MAE={val_mae:.4f}, RMSE={rmse:.4f}, MAE={mae:.4f}"
+)
+
+# Save model and artifacts
+model_dir = "models/tf_lstm_model"
+os.makedirs(model_dir, exist_ok=True)
+model.save(f"{model_dir}/model.keras")
+joblib.dump(scaler_X, f"{model_dir}/scaler_X.joblib")
+joblib.dump(scaler_y, f"{model_dir}/scaler_y.joblib")
 
 metadata = {
     "train_loss": train_loss,
     "val_loss": val_loss,
     "val_mae": val_mae,
+    "rmse": rmse,
+    "mae": mae,
     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
 }
 
-with open(f"{MODEL_DIR}/metadata.json", "w") as f:
-    import json
+with open(f"{model_dir}/metadata.json", "w") as f:
     json.dump(metadata, f, indent=4)
 
-log.info("✅ Model and artifacts saved locally.")
+log.info("Model and training metadata saved locally.")
 
-# ──────────────────────────────────────────────────────────────
-# ☁️ Upload Model to Hopsworks Registry
-# ──────────────────────────────────────────────────────────────
+# Upload to Hopsworks
 artifact_dir = os.path.join("models", "tf_lstm_artifact")
 os.makedirs(artifact_dir, exist_ok=True)
-for file in os.listdir(MODEL_DIR):
-    shutil.copy(os.path.join(MODEL_DIR, file), os.path.join(artifact_dir, file))
+for file in os.listdir(model_dir):
+    shutil.copy(os.path.join(model_dir, file), os.path.join(artifact_dir, file))
 
 model_meta = mr.python.create_model(
     name="tf_lstm_aqi_model",
     metrics={
         "train_loss": train_loss,
         "val_loss": val_loss,
-        "val_mae": val_mae
+        "val_mae": val_mae,
+        "rmse": rmse,
+        "mae": mae
     },
-    description="LSTM model for AQI forecasting trained on weather + AQI data for Karachi."
+    description="LSTM model for AQI forecasting trained on Karachi weather and AQI data."
 )
 model_meta.save(artifact_dir)
 
-log.info("🚀 Uploaded tf_lstm_aqi_model to Hopsworks Model Registry.")
-log.info(f"📈 Metrics: Train Loss={train_loss:.4f}, Val Loss={val_loss:.4f}, Val MAE={val_mae:.4f}")
-log.info("🏁 LSTM training and deployment pipeline completed successfully!")
+log.info("Model uploaded to Hopsworks successfully.")
+log.info(f"Final metrics — RMSE: {rmse:.4f}, MAE: {mae:.4f}, Val Loss: {val_loss:.4f}")
